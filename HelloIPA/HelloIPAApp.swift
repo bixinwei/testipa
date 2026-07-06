@@ -14,8 +14,6 @@ final class BrowserModel: ObservableObject {
 
     func attach(webView: BrowserWebView) {
         self.webView = webView
-        syncState(from: webView)
-        applyAnimatedImagePolicy()
     }
 
     func loadTypedURL() {
@@ -107,6 +105,9 @@ final class BrowserWebView: WKWebView {
     }
 
     func setGIFBlockingEnabled(_ enabled: Bool) {
+        if gifBlockingEnabled == enabled {
+            return
+        }
         gifBlockingEnabled = enabled
         updateGIFBlockingRule()
     }
@@ -161,6 +162,7 @@ struct EmbeddedWebView: UIViewRepresentable {
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         model.attach(webView: webView)
+        webView.setGIFBlockingEnabled(model.blockAnimatedImages)
 
         if let url = model.currentURL {
             webView.load(URLRequest(url: url))
