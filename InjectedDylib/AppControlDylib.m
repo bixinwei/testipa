@@ -28,6 +28,13 @@ static UILabel *gBlockCountLabel;
 
 static char kOrigWKDelegateDecisionKey;
 static char kOrigWKUIDelegateCreateWebViewKey;
+static char kAppCtrlWebViewConfiguredKey;
+static char kAppCtrlAppliedContentRuleSignatureKey;
+
+static NSString *const AppCtrlScriptMessageName = @"appctrlBlockNavigation";
+
+static WKContentRuleList *gAppCtrlContentRuleList;
+static NSString *gAppCtrlContentRuleListSignature;
 
 static NSString *appctrl_documents_path(void) {
     NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
@@ -262,6 +269,86 @@ static void appctrl_record_block_hit(void) {
     });
 }
 
+static NSString *appctrl_json_array_from_domains(NSSet<NSString *> *domains) {
+    NSArray<NSString *> *sorted = [[domains allObjects] sortedArrayUsingSelector:@selector(compare:)];
+    NSData *data = [NSJSONSerialization dataWithJSONObject:sorted options:0 error:nil];
+    if (!data) {
+        return @"[]";
+    }
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return json ?: @"[]";
+}
+
+static NSArray<NSString *> *appctrl_content_rule_domains_from_set(NSSet<NSString *> *domains) {
+    NSMutableOrderedSet<NSString *> *result = [NSMutableOrderedSet orderedSet];
+    for (NSString *domain in domains) {
+        NSString *normalized = appctrl_normalize_host(domain);
+        if (normalized.length == 0) {
+            continue;
+        }
+        [result addObject:normalized];
+        [result addObject:[@"*" stringByAppendingString:normalized]];
+    }
+    return result.array;
+}
+
+static NSString *appctrl_content_rule_list_json(void) {
+    NSMutableArray<NSDictionary *> *rules = [NSMutableArray array];
+    NSArray<NSString *> *blockedDomains = appctrl_content_rule_domains_from_set(appctrl_blocked_domains());
+    NSArray<NSString *> *whiteDomains = appctrl_content_rule_domains_from_set(appctrl_white_domains());
+
+    if (whiteDomains.count > 0) {
+        [rules addObject:@{
+            @"trigger": @{
+                @"url-filter": @"^https?://.*",
+                @"unless-domain": whiteDomains
+            },
+            @"action": @{
+                @"type": @"block"
+            }
+        }];
+    }
+
+    for (NSString *domain in blockedDomains) {
+        [rules addObject:@{
+            @"trigger": @{
+                @"url-filter": @"^https?://.*",
+                @"if-domain": @[domain]
+            },
+            @"action": @{
+                @"type": @"block"
+            }
+        }];
+    }
+
+    NSData *data = [NSJSONSerialization dataWithJSONObject:rules options:0 error:nil];
+    if (!data) {
+        return @"[]";
+    }
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return json ?: @"[]";
+}
+
+static void appctrl_refresh_content_rule_list_if_needed(void) {
+    if (![WKContentRuleListStore class]) {
+        return;
+    }
+
+    NSString *json = appctrl_content_rule_list_json();
+    if ([gAppCtrlContentRuleListSignature isEqualToString:json] && gAppCtrlContentRuleList != nil) {
+        return;
+    }
+
+    gAppCtrlContentRuleListSignature = [json copy];
+    [[WKContentRuleListStore defaultStore] compileContentRuleListForIdentifier:@"appctrl.dynamic.rules"
+                                                         encodedContentRuleList:json
+                                                              completionHandler:^(WKContentRuleList * _Nullable contentRuleList, NSError * _Nullable error) {
+        if (contentRuleList && !error) {
+            gAppCtrlContentRuleList = contentRuleList;
+        }
+    }];
+}
+
 static BOOL appctrl_should_block_host(NSString *host) {
     NSString *normalized = appctrl_normalize_host(host);
     if (normalized.length == 0) {
@@ -385,6 +472,90 @@ static BOOL appctrl_should_count_block_for_hostname(const char *hostname) {
     }
 
     return appctrl_should_block_host([NSString stringWithUTF8String:hostname]);
+}
+
+static void appctrl_handle_script_blocked_url_string(NSString *urlString) {
+    if (urlString.length == 0) {
+        return;
+    }
+
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) {
+        return;
+    }
+
+    if (appctrl_should_count_block_for_url(url)) {
+        appctrl_record_block_hit();
+    }
+}
+
+static NSString *appctrl_webview_user_script_source(void) {
+    NSString *blockedJSON = appctrl_json_array_from_domains(appctrl_blocked_domains());
+    NSString *whiteJSON = appctrl_json_array_from_domains(appctrl_white_domains());
+    NSString *disableNetwork = appctrl_should_block_all_network() ? @"true" : @"false";
+
+    return [NSString stringWithFormat:
+            @"(function(){\n"
+             "if(window.__appctrlInstalled){return;}\n"
+             "window.__appctrlInstalled=true;\n"
+             "var blocked=%@;\n"
+             "var white=%@;\n"
+             "var disableNetwork=%@;\n"
+             "var schemes={http:1,https:1,ws:1,wss:1,ftp:1,ftps:1};\n"
+             "function normalizeHost(host){return (host||'').toLowerCase().replace(/\\.+$/,'').trim();}\n"
+             "function matches(host,rule){return host===rule || host.slice(-(rule.length+1))==='.'+rule;}\n"
+             "function shouldBlock(urlString){\n"
+             "  try {\n"
+             "    var u=new URL(urlString, document.baseURI || location.href);\n"
+             "    var scheme=(u.protocol||'').replace(':','').toLowerCase();\n"
+             "    if(!schemes[scheme]){return false;}\n"
+             "    if(disableNetwork){return true;}\n"
+             "    var host=normalizeHost(u.hostname);\n"
+             "    if(!host){return false;}\n"
+             "    if(white.length){\n"
+             "      var allowed=false;\n"
+             "      for(var i=0;i<white.length;i++){ if(matches(host, white[i])){ allowed=true; break; } }\n"
+             "      if(!allowed){return true;}\n"
+             "    }\n"
+             "    for(var j=0;j<blocked.length;j++){ if(matches(host, blocked[j])){ return true; } }\n"
+             "    return false;\n"
+             "  } catch(e) { return false; }\n"
+             "}\n"
+             "function report(urlString){ try { window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.%@ && window.webkit.messageHandlers.%@.postMessage({url:urlString}); } catch(e){} }\n"
+             "function blockIfNeeded(urlString){ if(shouldBlock(urlString)){ report(urlString); return true; } return false; }\n"
+             "document.addEventListener('click', function(event){\n"
+             "  var node=event.target;\n"
+             "  while(node && node!==document){\n"
+             "    if(node.href && typeof node.href==='string'){\n"
+             "      if(blockIfNeeded(node.href)){ event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation && event.stopImmediatePropagation(); }\n"
+             "      return;\n"
+             "    }\n"
+             "    node=node.parentNode;\n"
+             "  }\n"
+             "}, true);\n"
+             "if(window.HTMLAnchorElement && HTMLAnchorElement.prototype){\n"
+             "  var origAnchorClick=HTMLAnchorElement.prototype.click;\n"
+             "  HTMLAnchorElement.prototype.click=function(){ if(blockIfNeeded(this.href)){ return; } return origAnchorClick ? origAnchorClick.apply(this, arguments) : undefined; };\n"
+             "}\n"
+             "if(window.open){\n"
+             "  var origOpen=window.open;\n"
+             "  window.open=function(url){ if(url && blockIfNeeded(url)){ return null; } return origOpen.apply(window, arguments); };\n"
+             "}\n"
+             "if(window.Location && Location.prototype){\n"
+             "  var origAssign=Location.prototype.assign;\n"
+             "  if(origAssign){ Location.prototype.assign=function(url){ if(url && blockIfNeeded(url)){ return; } return origAssign.apply(this, arguments); }; }\n"
+             "  var origReplace=Location.prototype.replace;\n"
+             "  if(origReplace){ Location.prototype.replace=function(url){ if(url && blockIfNeeded(url)){ return; } return origReplace.apply(this, arguments); }; }\n"
+             "}\n"
+             "if(window.history && history.pushState){\n"
+             "  var origPushState=history.pushState;\n"
+             "  history.pushState=function(state,title,url){ if(url && blockIfNeeded(url)){ return; } return origPushState.apply(history, arguments); };\n"
+             "}\n"
+             "if(window.history && history.replaceState){\n"
+             "  var origReplaceState=history.replaceState;\n"
+             "  history.replaceState=function(state,title,url){ if(url && blockIfNeeded(url)){ return; } return origReplaceState.apply(history, arguments); };\n"
+             "}\n"
+             "})();", blockedJSON, whiteJSON, disableNetwork, AppCtrlScriptMessageName, AppCtrlScriptMessageName];
 }
 
 static NSError *appctrl_block_error(void) {
@@ -732,6 +903,73 @@ static nw_connection_t appctrl_nw_connection_create(nw_endpoint_t endpoint, nw_p
     return connection;
 }
 
+@interface AppCtrlScriptMessageHandler : NSObject <WKScriptMessageHandler>
+@end
+
+@implementation AppCtrlScriptMessageHandler
+
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (![message.name isEqualToString:AppCtrlScriptMessageName]) {
+        return;
+    }
+
+    id body = message.body;
+    NSString *urlString = nil;
+    if ([body isKindOfClass:[NSDictionary class]]) {
+        urlString = body[@"url"];
+    } else if ([body isKindOfClass:[NSString class]]) {
+        urlString = body;
+    }
+    appctrl_handle_script_blocked_url_string(urlString);
+}
+
+@end
+
+static AppCtrlScriptMessageHandler *gScriptMessageHandler;
+
+static void appctrl_configure_webview_configuration(WKWebViewConfiguration *configuration) {
+    if (!configuration) {
+        return;
+    }
+
+    appctrl_refresh_content_rule_list_if_needed();
+
+    if (!configuration.userContentController) {
+        configuration.userContentController = [WKUserContentController new];
+    }
+
+    if (!gScriptMessageHandler) {
+        gScriptMessageHandler = [AppCtrlScriptMessageHandler new];
+    }
+
+    WKUserContentController *controller = configuration.userContentController;
+    BOOL alreadyConfigured = (objc_getAssociatedObject(configuration, &kAppCtrlWebViewConfiguredKey) != nil);
+    if (!alreadyConfigured) {
+        @try {
+            [controller removeScriptMessageHandlerForName:AppCtrlScriptMessageName];
+        } @catch (__unused NSException *exception) {
+        }
+        [controller addScriptMessageHandler:gScriptMessageHandler name:AppCtrlScriptMessageName];
+
+        WKUserScript *script = [[WKUserScript alloc] initWithSource:appctrl_webview_user_script_source()
+                                                      injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                   forMainFrameOnly:NO];
+        [controller addUserScript:script];
+        objc_setAssociatedObject(configuration, &kAppCtrlWebViewConfiguredKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    NSString *appliedSignature = objc_getAssociatedObject(controller, &kAppCtrlAppliedContentRuleSignatureKey);
+    if (gAppCtrlContentRuleList && ![appliedSignature isEqualToString:gAppCtrlContentRuleListSignature]) {
+        if ([controller respondsToSelector:@selector(removeAllContentRuleLists)]) {
+            [controller removeAllContentRuleLists];
+        }
+        [controller addContentRuleList:gAppCtrlContentRuleList];
+        if (gAppCtrlContentRuleListSignature) {
+            objc_setAssociatedObject(controller, &kAppCtrlAppliedContentRuleSignatureKey, gAppCtrlContentRuleListSignature, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        }
+    }
+}
+
 #define APPCTRL_INTERPOSE(replacement, replacee) \
     __attribute__((used)) static struct { const void *replacement; const void *replacee; } _appctrl_interpose_##replacee \
     __attribute__((section("__DATA,__interpose"))) = { (const void *)(unsigned long)&replacement, (const void *)(unsigned long)&replacee }
@@ -868,6 +1106,9 @@ static BOOL repl_openURL_legacy(id self, SEL _cmd, NSURL *url) {
 
 static id (*orig_wk_loadRequest)(id, SEL, NSURLRequest *);
 static id repl_wk_loadRequest(id self, SEL _cmd, NSURLRequest *request) {
+    if ([self isKindOfClass:[WKWebView class]]) {
+        appctrl_configure_webview_configuration(((WKWebView *)self).configuration);
+    }
     if (appctrl_should_block_url(request.URL)) {
         if (appctrl_should_count_block_for_url(request.URL)) {
             appctrl_record_block_hit();
@@ -879,6 +1120,9 @@ static id repl_wk_loadRequest(id self, SEL _cmd, NSURLRequest *request) {
 
 static id (*orig_wk_loadFileURL_allowingReadAccessToURL)(id, SEL, NSURL *, NSURL *);
 static id repl_wk_loadFileURL_allowingReadAccessToURL(id self, SEL _cmd, NSURL *url, NSURL *readAccessURL) {
+    if ([self isKindOfClass:[WKWebView class]]) {
+        appctrl_configure_webview_configuration(((WKWebView *)self).configuration);
+    }
     if (appctrl_should_block_url(url)) {
         if (appctrl_should_count_block_for_url(url)) {
             appctrl_record_block_hit();
@@ -982,6 +1226,47 @@ static void (*orig_wk_setUIDelegate)(id, SEL, id);
 static void repl_wk_setUIDelegate(id self, SEL _cmd, id delegate) {
     appctrl_swizzle_ui_delegate_if_needed(delegate);
     orig_wk_setUIDelegate(self, _cmd, delegate);
+}
+
+static id (*orig_wkwebviewconfiguration_init)(id, SEL);
+static id repl_wkwebviewconfiguration_init(id self, SEL _cmd) {
+    id result = orig_wkwebviewconfiguration_init(self, _cmd);
+    if ([result isKindOfClass:[WKWebViewConfiguration class]]) {
+        appctrl_configure_webview_configuration((WKWebViewConfiguration *)result);
+    }
+    return result;
+}
+
+static id (*orig_wk_initWithFrame_configuration)(id, SEL, CGRect, WKWebViewConfiguration *);
+static id repl_wk_initWithFrame_configuration(id self, SEL _cmd, CGRect frame, WKWebViewConfiguration *configuration) {
+    appctrl_configure_webview_configuration(configuration);
+    id result = orig_wk_initWithFrame_configuration(self, _cmd, frame, configuration);
+    if ([result isKindOfClass:[WKWebView class]]) {
+        WKWebView *webView = (WKWebView *)result;
+        if (webView.UIDelegate) {
+            appctrl_swizzle_ui_delegate_if_needed(webView.UIDelegate);
+        }
+        if (webView.navigationDelegate) {
+            appctrl_swizzle_navigation_delegate_if_needed(webView.navigationDelegate);
+        }
+    }
+    return result;
+}
+
+static id (*orig_wk_initWithCoder)(id, SEL, NSCoder *);
+static id repl_wk_initWithCoder(id self, SEL _cmd, NSCoder *coder) {
+    id result = orig_wk_initWithCoder(self, _cmd, coder);
+    if ([result isKindOfClass:[WKWebView class]]) {
+        WKWebView *webView = (WKWebView *)result;
+        appctrl_configure_webview_configuration(webView.configuration);
+        if (webView.UIDelegate) {
+            appctrl_swizzle_ui_delegate_if_needed(webView.UIDelegate);
+        }
+        if (webView.navigationDelegate) {
+            appctrl_swizzle_navigation_delegate_if_needed(webView.navigationDelegate);
+        }
+    }
+    return result;
 }
 
 static void appctrl_swizzle_instance_method(Class cls, SEL sel, IMP repl, IMP *orig) {
@@ -1338,6 +1623,13 @@ static void appctrl_init(void) {
             appctrl_swizzle_instance_method(wkwebview, @selector(loadFileURL:allowingReadAccessToURL:), (IMP)repl_wk_loadFileURL_allowingReadAccessToURL, (IMP *)&orig_wk_loadFileURL_allowingReadAccessToURL);
             appctrl_swizzle_instance_method(wkwebview, @selector(setNavigationDelegate:), (IMP)repl_wk_setNavigationDelegate, (IMP *)&orig_wk_setNavigationDelegate);
             appctrl_swizzle_instance_method(wkwebview, @selector(setUIDelegate:), (IMP)repl_wk_setUIDelegate, (IMP *)&orig_wk_setUIDelegate);
+            appctrl_swizzle_instance_method(wkwebview, @selector(initWithFrame:configuration:), (IMP)repl_wk_initWithFrame_configuration, (IMP *)&orig_wk_initWithFrame_configuration);
+            appctrl_swizzle_instance_method(wkwebview, @selector(initWithCoder:), (IMP)repl_wk_initWithCoder, (IMP *)&orig_wk_initWithCoder);
+        }
+
+        Class wkwebviewconfiguration = objc_getClass("WKWebViewConfiguration");
+        if (wkwebviewconfiguration) {
+            appctrl_swizzle_instance_method(wkwebviewconfiguration, @selector(init), (IMP)repl_wkwebviewconfiguration_init, (IMP *)&orig_wkwebviewconfiguration_init);
         }
 
         [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
