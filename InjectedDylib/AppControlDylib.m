@@ -1,7 +1,16 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
+#import <Network/Network.h>
 #import <objc/runtime.h>
+#import <arpa/inet.h>
+#import <dlfcn.h>
+#import <errno.h>
+#import <netdb.h>
+#import <netinet/in.h>
+#import <sys/socket.h>
+#import <sys/uio.h>
+#import <unistd.h>
 
 static NSString *const AppCtrlStateFileName = @"appctrl_state.plist";
 static NSString *const AppCtrlDomainsFileName = @"appctrl_blocked_domains.txt";
@@ -86,22 +95,376 @@ static BOOL appctrl_host_is_blocked(NSString *host) {
     return NO;
 }
 
+static BOOL appctrl_is_network_scheme(NSString *scheme) {
+    if (scheme.length == 0) {
+        return NO;
+    }
+
+    static NSSet<NSString *> *schemes;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        schemes = [NSSet setWithObjects:@"http", @"https", @"ws", @"wss", @"ftp", @"ftps", nil];
+    });
+    return [schemes containsObject:scheme.lowercaseString];
+}
+
+static BOOL appctrl_should_block_all_network(void) {
+    return appctrl_disable_network();
+}
+
 static BOOL appctrl_should_block_url(NSURL *url) {
     if (!url) {
         return NO;
     }
 
     NSString *scheme = url.scheme.lowercaseString ?: @"";
-    if (appctrl_disable_network() && ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"])) {
+    if (appctrl_should_block_all_network() && appctrl_is_network_scheme(scheme)) {
         return YES;
     }
 
     return appctrl_host_is_blocked(url.host);
 }
 
+static BOOL appctrl_sockaddr_is_loopback(const struct sockaddr *address) {
+    if (!address) {
+        return NO;
+    }
+
+    if (address->sa_family == AF_INET) {
+        const struct sockaddr_in *addr4 = (const struct sockaddr_in *)address;
+        uint32_t host = ntohl(addr4->sin_addr.s_addr);
+        return (host >> 24) == 127; // 127.0.0.0/8
+    }
+
+    if (address->sa_family == AF_INET6) {
+        const struct sockaddr_in6 *addr6 = (const struct sockaddr_in6 *)address;
+        return IN6_IS_ADDR_LOOPBACK(&addr6->sin6_addr) != 0;
+    }
+
+    return NO;
+}
+
+static BOOL appctrl_sockaddr_is_network(const struct sockaddr *address) {
+    if (!address) {
+        return NO;
+    }
+
+    if (address->sa_family != AF_INET && address->sa_family != AF_INET6) {
+        return NO;
+    }
+
+    // Treat loopback as local, not "network", so IPC / local servers keep working.
+    return !appctrl_sockaddr_is_loopback(address);
+}
+
+static BOOL appctrl_hostname_is_loopback(const char *hostname) {
+    if (!hostname || hostname[0] == '\0') {
+        return NO;
+    }
+
+    if (strcasecmp(hostname, "localhost") == 0 ||
+        strcmp(hostname, "127.0.0.1") == 0 ||
+        strcmp(hostname, "::1") == 0 ||
+        strcasecmp(hostname, "localhost.") == 0) {
+        return YES;
+    }
+
+    return NO;
+}
+
+static BOOL appctrl_should_block_socket_address(const struct sockaddr *address) {
+    return appctrl_should_block_all_network() && appctrl_sockaddr_is_network(address);
+}
+
 static NSError *appctrl_block_error(void) {
     return [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorNotConnectedToInternet userInfo:nil];
 }
+
+static BOOL appctrl_hostname_is_blocked(const char *hostname) {
+    if (!hostname) {
+        return NO;
+    }
+
+    NSString *host = [NSString stringWithUTF8String:hostname];
+    return appctrl_host_is_blocked(host);
+}
+
+static NSMutableSet<NSNumber *> *appctrl_network_fds(void) {
+    static NSMutableSet<NSNumber *> *fds;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        fds = [NSMutableSet set];
+    });
+    return fds;
+}
+
+static void appctrl_mark_network_fd(int fd) {
+    if (fd < 0) {
+        return;
+    }
+
+    NSMutableSet<NSNumber *> *fds = appctrl_network_fds();
+    @synchronized (fds) {
+        [fds addObject:@(fd)];
+    }
+}
+
+static void appctrl_unmark_network_fd(int fd) {
+    if (fd < 0) {
+        return;
+    }
+
+    NSMutableSet<NSNumber *> *fds = appctrl_network_fds();
+    @synchronized (fds) {
+        [fds removeObject:@(fd)];
+    }
+}
+
+static BOOL appctrl_is_network_fd(int fd) {
+    if (fd < 0) {
+        return NO;
+    }
+
+    NSMutableSet<NSNumber *> *fds = appctrl_network_fds();
+    @synchronized (fds) {
+        return [fds containsObject:@(fd)];
+    }
+}
+
+static BOOL appctrl_should_block_network_fd(int fd) {
+    return appctrl_should_block_all_network() && appctrl_is_network_fd(fd);
+}
+
+static BOOL appctrl_cf_native_socket_is_blocked(CFTypeRef value) {
+    if (!value || CFGetTypeID(value) != CFDataGetTypeID()) {
+        return NO;
+    }
+
+    CFDataRef data = (CFDataRef)value;
+    if (CFDataGetLength(data) < (CFIndex)sizeof(CFSocketNativeHandle)) {
+        return NO;
+    }
+
+    CFSocketNativeHandle fd = -1;
+    CFDataGetBytes(data, CFRangeMake(0, sizeof(fd)), (UInt8 *)&fd);
+    return appctrl_should_block_network_fd(fd);
+}
+
+static int appctrl_socket(int domain, int type, int protocol) {
+    // Do NOT block at creation time: we can't see the destination yet, and
+    // refusing all AF_INET/AF_INET6 sockets would also break loopback / IPC.
+    // Blocking happens later in connect()/send*() based on the actual address.
+    return socket(domain, type, protocol);
+}
+
+static int appctrl_connect(int socketFD, const struct sockaddr *address, socklen_t address_len) {
+    if (appctrl_sockaddr_is_network(address)) {
+        appctrl_mark_network_fd(socketFD);
+    }
+
+    if (appctrl_should_block_socket_address(address)) {
+        errno = ENETDOWN;
+        return -1;
+    }
+
+    return connect(socketFD, address, address_len);
+}
+
+static int appctrl_close(int fd) {
+    appctrl_unmark_network_fd(fd);
+    return close(fd);
+}
+
+static ssize_t appctrl_send(int socketFD, const void *buffer, size_t length, int flags) {
+    if (appctrl_should_block_network_fd(socketFD)) {
+        errno = ENETDOWN;
+        return -1;
+    }
+    return send(socketFD, buffer, length, flags);
+}
+
+static ssize_t appctrl_sendto(int socketFD, const void *buffer, size_t length, int flags, const struct sockaddr *dest_addr, socklen_t dest_len) {
+    if (appctrl_sockaddr_is_network(dest_addr)) {
+        appctrl_mark_network_fd(socketFD);
+    }
+
+    if (appctrl_should_block_network_fd(socketFD) || appctrl_should_block_socket_address(dest_addr)) {
+        errno = ENETDOWN;
+        return -1;
+    }
+    return sendto(socketFD, buffer, length, flags, dest_addr, dest_len);
+}
+
+static ssize_t appctrl_recv(int socketFD, void *buffer, size_t length, int flags) {
+    if (appctrl_should_block_network_fd(socketFD)) {
+        errno = ENETDOWN;
+        return -1;
+    }
+    return recv(socketFD, buffer, length, flags);
+}
+
+static ssize_t appctrl_recvfrom(int socketFD, void *buffer, size_t length, int flags, struct sockaddr *address, socklen_t *address_len) {
+    if (appctrl_should_block_network_fd(socketFD)) {
+        errno = ENETDOWN;
+        return -1;
+    }
+    return recvfrom(socketFD, buffer, length, flags, address, address_len);
+}
+
+static ssize_t appctrl_write(int fd, const void *buffer, size_t count) {
+    if (appctrl_should_block_network_fd(fd)) {
+        errno = ENETDOWN;
+        return -1;
+    }
+    return write(fd, buffer, count);
+}
+
+static ssize_t appctrl_writev(int fd, const struct iovec *iov, int iovcnt) {
+    if (appctrl_should_block_network_fd(fd)) {
+        errno = ENETDOWN;
+        return -1;
+    }
+    return writev(fd, iov, iovcnt);
+}
+
+static ssize_t appctrl_read(int fd, void *buffer, size_t count) {
+    if (appctrl_should_block_network_fd(fd)) {
+        errno = ENETDOWN;
+        return -1;
+    }
+    return read(fd, buffer, count);
+}
+
+static ssize_t appctrl_readv(int fd, const struct iovec *iov, int iovcnt) {
+    if (appctrl_should_block_network_fd(fd)) {
+        errno = ENETDOWN;
+        return -1;
+    }
+    return readv(fd, iov, iovcnt);
+}
+
+static BOOL appctrl_should_block_hostname(const char *name) {
+    // Never block loopback lookups: local servers / IPC must keep resolving.
+    if (appctrl_hostname_is_loopback(name)) {
+        return NO;
+    }
+    if (appctrl_should_block_all_network() && name && name[0] != '\0') {
+        return YES;
+    }
+    return appctrl_hostname_is_blocked(name);
+}
+
+static int appctrl_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
+    if (appctrl_should_block_hostname(node)) {
+        if (res) {
+            *res = NULL;
+        }
+        return EAI_FAIL;
+    }
+    return getaddrinfo(node, service, hints, res);
+}
+
+static struct hostent *appctrl_gethostbyname(const char *name) {
+    if (appctrl_should_block_hostname(name)) {
+        h_errno = HOST_NOT_FOUND;
+        return NULL;
+    }
+    return gethostbyname(name);
+}
+
+static struct hostent *appctrl_gethostbyname2(const char *name, int af) {
+    if (appctrl_should_block_hostname(name)) {
+        h_errno = HOST_NOT_FOUND;
+        return NULL;
+    }
+    return gethostbyname2(name, af);
+}
+
+static void appctrl_CFStreamCreatePairWithSocketToHost(CFAllocatorRef alloc, CFStringRef host, UInt32 port, CFReadStreamRef *readStream, CFWriteStreamRef *writeStream) {
+    NSString *hostString = host ? (__bridge NSString *)host : nil;
+    BOOL isLoopback = hostString.length > 0 && appctrl_hostname_is_loopback(hostString.UTF8String);
+    if (!isLoopback && ((appctrl_should_block_all_network() && hostString.length > 0) || appctrl_host_is_blocked(hostString))) {
+        if (readStream) {
+            *readStream = NULL;
+        }
+        if (writeStream) {
+            *writeStream = NULL;
+        }
+        return;
+    }
+    CFStreamCreatePairWithSocketToHost(alloc, host, port, readStream, writeStream);
+}
+
+static void appctrl_CFStreamCreatePairWithSocket(CFAllocatorRef alloc, CFSocketNativeHandle sock, CFReadStreamRef *readStream, CFWriteStreamRef *writeStream) {
+    if (appctrl_should_block_network_fd(sock)) {
+        if (readStream) {
+            *readStream = NULL;
+        }
+        if (writeStream) {
+            *writeStream = NULL;
+        }
+        return;
+    }
+    CFStreamCreatePairWithSocket(alloc, sock, readStream, writeStream);
+}
+
+static Boolean appctrl_CFReadStreamOpen(CFReadStreamRef stream) {
+    CFTypeRef nativeHandle = stream ? CFReadStreamCopyProperty(stream, kCFStreamPropertySocketNativeHandle) : NULL;
+    BOOL shouldBlock = appctrl_cf_native_socket_is_blocked(nativeHandle);
+    if (nativeHandle) {
+        CFRelease(nativeHandle);
+    }
+
+    if (shouldBlock) {
+        return false;
+    }
+    return CFReadStreamOpen(stream);
+}
+
+static Boolean appctrl_CFWriteStreamOpen(CFWriteStreamRef stream) {
+    CFTypeRef nativeHandle = stream ? CFWriteStreamCopyProperty(stream, kCFStreamPropertySocketNativeHandle) : NULL;
+    BOOL shouldBlock = appctrl_cf_native_socket_is_blocked(nativeHandle);
+    if (nativeHandle) {
+        CFRelease(nativeHandle);
+    }
+
+    if (shouldBlock) {
+        return false;
+    }
+    return CFWriteStreamOpen(stream);
+}
+
+static void appctrl_nw_connection_start(nw_connection_t connection) {
+    if (appctrl_should_block_all_network()) {
+        nw_connection_cancel(connection);
+        return;
+    }
+    nw_connection_start(connection);
+}
+
+#define APPCTRL_INTERPOSE(replacement, replacee) \
+    __attribute__((used)) static struct { const void *replacement; const void *replacee; } _appctrl_interpose_##replacee \
+    __attribute__((section("__DATA,__interpose"))) = { (const void *)(unsigned long)&replacement, (const void *)(unsigned long)&replacee }
+
+APPCTRL_INTERPOSE(appctrl_socket, socket);
+APPCTRL_INTERPOSE(appctrl_connect, connect);
+APPCTRL_INTERPOSE(appctrl_close, close);
+APPCTRL_INTERPOSE(appctrl_send, send);
+APPCTRL_INTERPOSE(appctrl_sendto, sendto);
+APPCTRL_INTERPOSE(appctrl_recv, recv);
+APPCTRL_INTERPOSE(appctrl_recvfrom, recvfrom);
+APPCTRL_INTERPOSE(appctrl_write, write);
+APPCTRL_INTERPOSE(appctrl_writev, writev);
+APPCTRL_INTERPOSE(appctrl_read, read);
+APPCTRL_INTERPOSE(appctrl_readv, readv);
+APPCTRL_INTERPOSE(appctrl_getaddrinfo, getaddrinfo);
+APPCTRL_INTERPOSE(appctrl_gethostbyname, gethostbyname);
+APPCTRL_INTERPOSE(appctrl_gethostbyname2, gethostbyname2);
+APPCTRL_INTERPOSE(appctrl_CFStreamCreatePairWithSocketToHost, CFStreamCreatePairWithSocketToHost);
+APPCTRL_INTERPOSE(appctrl_CFStreamCreatePairWithSocket, CFStreamCreatePairWithSocket);
+APPCTRL_INTERPOSE(appctrl_CFReadStreamOpen, CFReadStreamOpen);
+APPCTRL_INTERPOSE(appctrl_CFWriteStreamOpen, CFWriteStreamOpen);
+APPCTRL_INTERPOSE(appctrl_nw_connection_start, nw_connection_start);
 
 static NSURLSessionDataTask *(*orig_dataTaskWithRequest_completionHandler)(id, SEL, NSURLRequest *, void (^)(NSData *, NSURLResponse *, NSError *));
 static NSURLSessionDataTask *repl_dataTaskWithRequest_completionHandler(id self, SEL _cmd, NSURLRequest *request, void (^completion)(NSData *, NSURLResponse *, NSError *)) {
@@ -274,6 +637,84 @@ static void appctrl_swizzle_class_method(Class cls, SEL sel, IMP repl, IMP *orig
     method_setImplementation(method, repl);
 }
 
+static CGFloat appctrl_clamp(CGFloat value, CGFloat minValue, CGFloat maxValue) {
+    if (maxValue < minValue) {
+        return minValue;
+    }
+    return MIN(MAX(value, minValue), maxValue);
+}
+
+static void appctrl_clamp_floating_button(void) {
+    if (!gFloatingButton || !gFloatingButton.superview) {
+        return;
+    }
+
+    UIView *container = gFloatingButton.superview;
+    CGSize boundsSize = container.bounds.size;
+    CGSize buttonSize = gFloatingButton.bounds.size;
+    CGFloat halfWidth = buttonSize.width / 2.0;
+    CGFloat halfHeight = buttonSize.height / 2.0;
+
+    gFloatingButton.center = CGPointMake(
+        appctrl_clamp(gFloatingButton.center.x, halfWidth, boundsSize.width - halfWidth),
+        appctrl_clamp(gFloatingButton.center.y, halfHeight, boundsSize.height - halfHeight)
+    );
+}
+
+static void appctrl_position_panel_near_button(void) {
+    if (!gFloatingButton || !gPanelView || !gFloatingButton.superview) {
+        return;
+    }
+
+    UIView *container = gFloatingButton.superview;
+    CGSize panelSize = gPanelView.bounds.size;
+    if (panelSize.width <= 0 || panelSize.height <= 0) {
+        panelSize = gPanelView.frame.size;
+    }
+
+    CGFloat margin = 8.0;
+    CGRect buttonFrame = gFloatingButton.frame;
+    CGFloat x = CGRectGetMinX(buttonFrame);
+    CGFloat y = CGRectGetMaxY(buttonFrame) + 12.0;
+    CGFloat maxX = container.bounds.size.width - panelSize.width - margin;
+
+    x = appctrl_clamp(x, margin, maxX);
+    if (y + panelSize.height + margin > container.bounds.size.height) {
+        y = CGRectGetMinY(buttonFrame) - panelSize.height - 12.0;
+    }
+    y = appctrl_clamp(y, margin, container.bounds.size.height - panelSize.height - margin);
+
+    gPanelView.frame = (CGRect){CGPointMake(x, y), panelSize};
+}
+
+static void appctrl_apply_saved_button_position(void) {
+    if (!gFloatingButton) {
+        return;
+    }
+
+    NSDictionary *state = appctrl_load_state_file();
+    NSNumber *x = state[@"floatingButtonCenterX"];
+    NSNumber *y = state[@"floatingButtonCenterY"];
+    if (![x isKindOfClass:[NSNumber class]] || ![y isKindOfClass:[NSNumber class]]) {
+        return;
+    }
+
+    gFloatingButton.center = CGPointMake(x.doubleValue, y.doubleValue);
+    appctrl_clamp_floating_button();
+}
+
+static void appctrl_save_button_position(void) {
+    if (!gFloatingButton) {
+        return;
+    }
+
+    NSMutableDictionary *state = [appctrl_load_state_file() mutableCopy];
+    state[@"disableNetwork"] = @(gNetworkSwitch ? gNetworkSwitch.on : appctrl_disable_network());
+    state[@"floatingButtonCenterX"] = @(gFloatingButton.center.x);
+    state[@"floatingButtonCenterY"] = @(gFloatingButton.center.y);
+    [state writeToFile:appctrl_state_path() atomically:YES];
+}
+
 static void appctrl_reload_panel_from_disk(void) {
     if (!gNetworkSwitch || !gDomainsTextView) {
         return;
@@ -283,7 +724,12 @@ static void appctrl_reload_panel_from_disk(void) {
 }
 
 static void appctrl_save_panel_state(void) {
-    NSDictionary *state = @{@"disableNetwork": @(gNetworkSwitch.on)};
+    NSMutableDictionary *state = [appctrl_load_state_file() mutableCopy];
+    state[@"disableNetwork"] = @(gNetworkSwitch.on);
+    if (gFloatingButton) {
+        state[@"floatingButtonCenterX"] = @(gFloatingButton.center.x);
+        state[@"floatingButtonCenterY"] = @(gFloatingButton.center.y);
+    }
     [state writeToFile:appctrl_state_path() atomically:YES];
 
     NSString *domains = gDomainsTextView.text ?: @"";
@@ -297,6 +743,7 @@ static void appctrl_toggle_panel(void) {
     gPanelView.hidden = !gPanelView.hidden;
     if (!gPanelView.hidden) {
         appctrl_reload_panel_from_disk();
+        appctrl_position_panel_near_button();
     }
 }
 
@@ -324,6 +771,25 @@ static UIButton *appctrl_button(NSString *title, SEL action, id target) {
 
 - (void)reloadPressed {
     appctrl_reload_panel_from_disk();
+}
+
+- (void)floatingButtonDragged:(UIPanGestureRecognizer *)recognizer {
+    UIView *button = recognizer.view;
+    UIView *container = button.superview;
+    if (!button || !container) {
+        return;
+    }
+
+    CGPoint translation = [recognizer translationInView:container];
+    button.center = CGPointMake(button.center.x + translation.x, button.center.y + translation.y);
+    [recognizer setTranslation:CGPointZero inView:container];
+
+    appctrl_clamp_floating_button();
+    appctrl_position_panel_near_button();
+
+    if (recognizer.state == UIGestureRecognizerStateEnded || recognizer.state == UIGestureRecognizerStateCancelled) {
+        appctrl_save_button_position();
+    }
 }
 
 @end
@@ -392,7 +858,9 @@ static void appctrl_install_panel(void) {
     [gFloatingButton setTitle:@"AC" forState:UIControlStateNormal];
     [gFloatingButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     [gFloatingButton addTarget:gPanelTarget action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
+    [gFloatingButton addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:gPanelTarget action:@selector(floatingButtonDragged:)]];
     [container addSubview:gFloatingButton];
+    appctrl_apply_saved_button_position();
 
     gPanelView = [[UIView alloc] initWithFrame:CGRectMake(16, 188, 320, 260)];
     gPanelView.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.96];
