@@ -8,6 +8,8 @@
 #import <errno.h>
 #import <netdb.h>
 #import <netinet/in.h>
+#import <string.h>
+#import <strings.h>
 #import <sys/socket.h>
 #import <sys/uio.h>
 #import <unistd.h>
@@ -782,7 +784,7 @@ static UIButton *appctrl_button(NSString *title, SEL action, id target) {
 
     CGPoint translation = [recognizer translationInView:container];
     button.center = CGPointMake(button.center.x + translation.x, button.center.y + translation.y);
-    [recognizer setTranslation:CGPointZero inView:container];
+    [recognizer setTranslation:(CGPoint){0, 0} inView:container];
 
     appctrl_clamp_floating_button();
     appctrl_position_panel_near_button();
@@ -821,12 +823,7 @@ static UIWindow *appctrl_find_host_window(void) {
         }
     }
 
-    UIWindow *key = UIApplication.sharedApplication.keyWindow;
-    if (key) {
-        return key;
-    }
-
-    return UIApplication.sharedApplication.windows.firstObject;
+    return nil;
 }
 
 static void appctrl_install_panel(void) {
@@ -876,7 +873,7 @@ static void appctrl_install_panel(void) {
     [gPanelView addSubview:title];
 
     UILabel *networkLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 48, 200, 24)];
-    networkLabel.text = @"Disable HTTP/HTTPS";
+    networkLabel.text = @"Disable Network";
     networkLabel.font = [UIFont systemFontOfSize:15];
     [gPanelView addSubview:networkLabel];
 

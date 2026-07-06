@@ -19,6 +19,8 @@ xcrun clang \
   -framework Foundation \
   -framework UIKit \
   -framework WebKit \
+  -framework CoreGraphics \
+  -framework Network \
   -install_name "@rpath/AppControlDylib.dylib" \
   "$SRC" \
   -o "$OUT"
