@@ -16,12 +16,15 @@
 
 static NSString *const AppCtrlStateFileName = @"appctrl_state.plist";
 static NSString *const AppCtrlDomainsFileName = @"appctrl_blocked_domains.txt";
+static NSString *const AppCtrlWhiteDomainsFileName = @"appctrl_white_domains.txt";
 
 static __weak UIWindow *gHostWindow;
 static UIButton *gFloatingButton;
 static UIView *gPanelView;
 static UISwitch *gNetworkSwitch;
 static UITextView *gDomainsTextView;
+static UITextView *gWhiteDomainsTextView;
+static UILabel *gBlockCountLabel;
 
 static char kOrigWKDelegateDecisionKey;
 
@@ -38,9 +41,39 @@ static NSString *appctrl_domains_path(void) {
     return [appctrl_documents_path() stringByAppendingPathComponent:AppCtrlDomainsFileName];
 }
 
+static NSString *appctrl_white_domains_path(void) {
+    return [appctrl_documents_path() stringByAppendingPathComponent:AppCtrlWhiteDomainsFileName];
+}
+
 static NSDictionary *appctrl_load_state_file(void) {
     NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:appctrl_state_path()];
     return [dict isKindOfClass:[NSDictionary class]] ? dict : @{};
+}
+
+static NSString *appctrl_normalize_host(NSString *host) {
+    if (![host isKindOfClass:[NSString class]]) {
+        return @"";
+    }
+
+    NSString *lower = [[host lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    while ([lower hasSuffix:@"."]) {
+        lower = [lower substringToIndex:lower.length - 1];
+    }
+    return lower;
+}
+
+static NSSet<NSString *> *appctrl_domains_from_raw(NSString *raw) {
+    NSArray<NSString *> *parts = [raw componentsSeparatedByCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@",\n\r"]];
+    NSMutableSet<NSString *> *domains = [NSMutableSet set];
+
+    for (NSString *part in parts) {
+        NSString *trimmed = appctrl_normalize_host(part);
+        if (trimmed.length > 0) {
+            [domains addObject:trimmed];
+        }
+    }
+
+    return [domains copy];
 }
 
 static BOOL appctrl_disable_network(void) {
@@ -69,28 +102,62 @@ static NSString *appctrl_domains_file_content(void) {
 }
 
 static NSSet<NSString *> *appctrl_blocked_domains(void) {
-    NSString *raw = appctrl_domains_file_content();
-    NSArray<NSString *> *parts = [raw componentsSeparatedByCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@",\n\r"]];
-    NSMutableSet<NSString *> *domains = [NSMutableSet set];
-
-    for (NSString *part in parts) {
-        NSString *trimmed = [[part lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if (trimmed.length > 0) {
-            [domains addObject:trimmed];
-        }
-    }
-
-    return [domains copy];
+    return appctrl_domains_from_raw(appctrl_domains_file_content());
 }
 
-static BOOL appctrl_host_is_blocked(NSString *host) {
-    if (host.length == 0) {
+static NSString *appctrl_white_domains_file_content(void) {
+    NSError *error = nil;
+    NSString *content = [NSString stringWithContentsOfFile:appctrl_white_domains_path() encoding:NSUTF8StringEncoding error:&error];
+    if (content.length > 0) {
+        return content;
+    }
+
+    const char *value = getenv("APPCTRL_WHITE_DOMAINS");
+    if (!value) {
+        return @"";
+    }
+    return [NSString stringWithUTF8String:value];
+}
+
+static NSSet<NSString *> *appctrl_white_domains(void) {
+    return appctrl_domains_from_raw(appctrl_white_domains_file_content());
+}
+
+static BOOL appctrl_host_matches_rule(NSString *host, NSString *rule) {
+    if (host.length == 0 || rule.length == 0) {
         return NO;
     }
 
-    NSString *lower = [host lowercaseString];
+    return [host isEqualToString:rule] || [host hasSuffix:[@"." stringByAppendingString:rule]];
+}
+
+static BOOL appctrl_host_is_whitelisted(NSString *host) {
+    NSString *lower = appctrl_normalize_host(host);
+    if (lower.length == 0) {
+        return NO;
+    }
+
+    NSSet<NSString *> *whiteDomains = appctrl_white_domains();
+    if (whiteDomains.count == 0) {
+        return YES;
+    }
+
+    for (NSString *allowed in whiteDomains) {
+        if (appctrl_host_matches_rule(lower, allowed)) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL appctrl_host_is_blocked(NSString *host) {
+    NSString *lower = appctrl_normalize_host(host);
+    if (lower.length == 0) {
+        return NO;
+    }
+
     for (NSString *blocked in appctrl_blocked_domains()) {
-        if ([lower isEqualToString:blocked] || [lower hasSuffix:[@"." stringByAppendingString:blocked]]) {
+        if (appctrl_host_matches_rule(lower, blocked)) {
             return YES;
         }
     }
@@ -114,6 +181,75 @@ static BOOL appctrl_should_block_all_network(void) {
     return appctrl_disable_network();
 }
 
+static NSUInteger appctrl_block_count(void) {
+    NSNumber *count = appctrl_load_state_file()[@"blockCount"];
+    return [count isKindOfClass:[NSNumber class]] ? count.unsignedIntegerValue : 0;
+}
+
+static void appctrl_refresh_block_count_label(void) {
+    if (!gBlockCountLabel) {
+        return;
+    }
+    gBlockCountLabel.text = [NSString stringWithFormat:@"Blocked: %lu", (unsigned long)appctrl_block_count()];
+}
+
+static void appctrl_record_block_hit(void) {
+    NSMutableDictionary *state = [appctrl_load_state_file() mutableCopy];
+    NSNumber *count = state[@"blockCount"];
+    NSUInteger nextCount = [count isKindOfClass:[NSNumber class]] ? count.unsignedIntegerValue + 1 : 1;
+    state[@"blockCount"] = @(nextCount);
+    if (gFloatingButton) {
+        state[@"floatingButtonCenterX"] = @(gFloatingButton.center.x);
+        state[@"floatingButtonCenterY"] = @(gFloatingButton.center.y);
+    }
+    if (gNetworkSwitch) {
+        state[@"disableNetwork"] = @(gNetworkSwitch.on);
+    }
+    [state writeToFile:appctrl_state_path() atomically:YES];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        appctrl_refresh_block_count_label();
+    });
+}
+
+static BOOL appctrl_should_block_host(NSString *host) {
+    NSString *normalized = appctrl_normalize_host(host);
+    if (normalized.length == 0) {
+        return NO;
+    }
+
+    if (!appctrl_host_is_whitelisted(normalized)) {
+        return YES;
+    }
+
+    return appctrl_host_is_blocked(normalized);
+}
+
+static BOOL appctrl_should_count_block_for_url(NSURL *url) {
+    if (!url) {
+        return NO;
+    }
+
+    NSString *scheme = url.scheme.lowercaseString ?: @"";
+    if (!appctrl_is_network_scheme(scheme)) {
+        return NO;
+    }
+
+    return appctrl_should_block_host(url.host);
+}
+
+static BOOL appctrl_should_count_block_for_hostname(const char *hostname) {
+    if (!hostname || hostname[0] == '\0') {
+        return NO;
+    }
+
+    if (appctrl_hostname_is_loopback(hostname)) {
+        return NO;
+    }
+
+    return appctrl_should_block_host([NSString stringWithUTF8String:hostname]);
+}
+
 static BOOL appctrl_should_block_url(NSURL *url) {
     if (!url) {
         return NO;
@@ -124,7 +260,11 @@ static BOOL appctrl_should_block_url(NSURL *url) {
         return YES;
     }
 
-    return appctrl_host_is_blocked(url.host);
+    if (appctrl_is_network_scheme(scheme)) {
+        return appctrl_should_block_host(url.host);
+    }
+
+    return NO;
 }
 
 static BOOL appctrl_sockaddr_is_loopback(const struct sockaddr *address) {
@@ -175,7 +315,26 @@ static BOOL appctrl_hostname_is_loopback(const char *hostname) {
 }
 
 static BOOL appctrl_should_block_socket_address(const struct sockaddr *address) {
-    return appctrl_should_block_all_network() && appctrl_sockaddr_is_network(address);
+    if (!appctrl_sockaddr_is_network(address)) {
+        return NO;
+    }
+
+    if (appctrl_should_block_all_network()) {
+        return YES;
+    }
+
+    char hostBuffer[NI_MAXHOST] = {0};
+    if (getnameinfo(address,
+                    (address->sa_family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6),
+                    hostBuffer,
+                    sizeof(hostBuffer),
+                    NULL,
+                    0,
+                    NI_NUMERICHOST) == 0) {
+        return !appctrl_host_is_whitelisted([NSString stringWithUTF8String:hostBuffer]);
+    }
+
+    return NO;
 }
 
 static NSError *appctrl_block_error(void) {
@@ -188,7 +347,7 @@ static BOOL appctrl_hostname_is_blocked(const char *hostname) {
     }
 
     NSString *host = [NSString stringWithUTF8String:hostname];
-    return appctrl_host_is_blocked(host);
+    return appctrl_should_block_host(host);
 }
 
 static NSMutableSet<NSNumber *> *appctrl_network_fds(void) {
@@ -358,6 +517,9 @@ static BOOL appctrl_should_block_hostname(const char *name) {
 
 static int appctrl_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
     if (appctrl_should_block_hostname(node)) {
+        if (appctrl_should_count_block_for_hostname(node)) {
+            appctrl_record_block_hit();
+        }
         if (res) {
             *res = NULL;
         }
@@ -368,6 +530,9 @@ static int appctrl_getaddrinfo(const char *node, const char *service, const stru
 
 static struct hostent *appctrl_gethostbyname(const char *name) {
     if (appctrl_should_block_hostname(name)) {
+        if (appctrl_should_count_block_for_hostname(name)) {
+            appctrl_record_block_hit();
+        }
         h_errno = HOST_NOT_FOUND;
         return NULL;
     }
@@ -376,6 +541,9 @@ static struct hostent *appctrl_gethostbyname(const char *name) {
 
 static struct hostent *appctrl_gethostbyname2(const char *name, int af) {
     if (appctrl_should_block_hostname(name)) {
+        if (appctrl_should_count_block_for_hostname(name)) {
+            appctrl_record_block_hit();
+        }
         h_errno = HOST_NOT_FOUND;
         return NULL;
     }
@@ -385,7 +553,10 @@ static struct hostent *appctrl_gethostbyname2(const char *name, int af) {
 static void appctrl_CFStreamCreatePairWithSocketToHost(CFAllocatorRef alloc, CFStringRef host, UInt32 port, CFReadStreamRef *readStream, CFWriteStreamRef *writeStream) {
     NSString *hostString = host ? (__bridge NSString *)host : nil;
     BOOL isLoopback = hostString.length > 0 && appctrl_hostname_is_loopback(hostString.UTF8String);
-    if (!isLoopback && ((appctrl_should_block_all_network() && hostString.length > 0) || appctrl_host_is_blocked(hostString))) {
+    if (!isLoopback && ((appctrl_should_block_all_network() && hostString.length > 0) || appctrl_should_block_host(hostString))) {
+        if (appctrl_should_block_host(hostString)) {
+            appctrl_record_block_hit();
+        }
         if (readStream) {
             *readStream = NULL;
         }
@@ -471,6 +642,9 @@ APPCTRL_INTERPOSE(appctrl_nw_connection_start, nw_connection_start);
 static NSURLSessionDataTask *(*orig_dataTaskWithRequest_completionHandler)(id, SEL, NSURLRequest *, void (^)(NSData *, NSURLResponse *, NSError *));
 static NSURLSessionDataTask *repl_dataTaskWithRequest_completionHandler(id self, SEL _cmd, NSURLRequest *request, void (^completion)(NSData *, NSURLResponse *, NSError *)) {
     if (appctrl_should_block_url(request.URL)) {
+        if (appctrl_should_count_block_for_url(request.URL)) {
+            appctrl_record_block_hit();
+        }
         if (completion) {
             completion(nil, nil, appctrl_block_error());
         }
@@ -482,6 +656,9 @@ static NSURLSessionDataTask *repl_dataTaskWithRequest_completionHandler(id self,
 static NSURLSessionDataTask *(*orig_dataTaskWithURL_completionHandler)(id, SEL, NSURL *, void (^)(NSData *, NSURLResponse *, NSError *));
 static NSURLSessionDataTask *repl_dataTaskWithURL_completionHandler(id self, SEL _cmd, NSURL *url, void (^completion)(NSData *, NSURLResponse *, NSError *)) {
     if (appctrl_should_block_url(url)) {
+        if (appctrl_should_count_block_for_url(url)) {
+            appctrl_record_block_hit();
+        }
         if (completion) {
             completion(nil, nil, appctrl_block_error());
         }
@@ -493,6 +670,9 @@ static NSURLSessionDataTask *repl_dataTaskWithURL_completionHandler(id self, SEL
 static NSURLSessionUploadTask *(*orig_uploadTaskWithRequest_fromData_completionHandler)(id, SEL, NSURLRequest *, NSData *, void (^)(NSData *, NSURLResponse *, NSError *));
 static NSURLSessionUploadTask *repl_uploadTaskWithRequest_fromData_completionHandler(id self, SEL _cmd, NSURLRequest *request, NSData *bodyData, void (^completion)(NSData *, NSURLResponse *, NSError *)) {
     if (appctrl_should_block_url(request.URL)) {
+        if (appctrl_should_count_block_for_url(request.URL)) {
+            appctrl_record_block_hit();
+        }
         if (completion) {
             completion(nil, nil, appctrl_block_error());
         }
@@ -504,6 +684,9 @@ static NSURLSessionUploadTask *repl_uploadTaskWithRequest_fromData_completionHan
 static NSURLSessionDownloadTask *(*orig_downloadTaskWithRequest_completionHandler)(id, SEL, NSURLRequest *, void (^)(NSURL *, NSURLResponse *, NSError *));
 static NSURLSessionDownloadTask *repl_downloadTaskWithRequest_completionHandler(id self, SEL _cmd, NSURLRequest *request, void (^completion)(NSURL *, NSURLResponse *, NSError *)) {
     if (appctrl_should_block_url(request.URL)) {
+        if (appctrl_should_count_block_for_url(request.URL)) {
+            appctrl_record_block_hit();
+        }
         if (completion) {
             completion(nil, nil, appctrl_block_error());
         }
@@ -515,6 +698,9 @@ static NSURLSessionDownloadTask *repl_downloadTaskWithRequest_completionHandler(
 static NSData *(*orig_sendSynchronousRequest_returningResponse_error)(id, SEL, NSURLRequest *, NSURLResponse **, NSError **);
 static NSData *repl_sendSynchronousRequest_returningResponse_error(id self, SEL _cmd, NSURLRequest *request, NSURLResponse **response, NSError **error) {
     if (appctrl_should_block_url(request.URL)) {
+        if (appctrl_should_count_block_for_url(request.URL)) {
+            appctrl_record_block_hit();
+        }
         if (error) {
             *error = appctrl_block_error();
         }
@@ -526,6 +712,9 @@ static NSData *repl_sendSynchronousRequest_returningResponse_error(id self, SEL 
 static void (*orig_sendAsynchronousRequest_queue_completionHandler)(id, SEL, NSURLRequest *, NSOperationQueue *, void (^)(NSURLResponse *, NSData *, NSError *));
 static void repl_sendAsynchronousRequest_queue_completionHandler(id self, SEL _cmd, NSURLRequest *request, NSOperationQueue *queue, void (^completion)(NSURLResponse *, NSData *, NSError *)) {
     if (appctrl_should_block_url(request.URL)) {
+        if (appctrl_should_count_block_for_url(request.URL)) {
+            appctrl_record_block_hit();
+        }
         if (completion) {
             completion(nil, nil, appctrl_block_error());
         }
@@ -537,6 +726,9 @@ static void repl_sendAsynchronousRequest_queue_completionHandler(id self, SEL _c
 static BOOL (*orig_openURL_options_completionHandler)(id, SEL, NSURL *, NSDictionary *, void (^)(BOOL));
 static BOOL repl_openURL_options_completionHandler(id self, SEL _cmd, NSURL *url, NSDictionary *options, void (^completion)(BOOL)) {
     if (appctrl_should_block_url(url)) {
+        if (appctrl_should_count_block_for_url(url)) {
+            appctrl_record_block_hit();
+        }
         if (completion) {
             completion(NO);
         }
@@ -548,6 +740,9 @@ static BOOL repl_openURL_options_completionHandler(id self, SEL _cmd, NSURL *url
 static BOOL (*orig_openURL_legacy)(id, SEL, NSURL *);
 static BOOL repl_openURL_legacy(id self, SEL _cmd, NSURL *url) {
     if (appctrl_should_block_url(url)) {
+        if (appctrl_should_count_block_for_url(url)) {
+            appctrl_record_block_hit();
+        }
         return NO;
     }
     return orig_openURL_legacy(self, _cmd, url);
@@ -556,6 +751,9 @@ static BOOL repl_openURL_legacy(id self, SEL _cmd, NSURL *url) {
 static id (*orig_wk_loadRequest)(id, SEL, NSURLRequest *);
 static id repl_wk_loadRequest(id self, SEL _cmd, NSURLRequest *request) {
     if (appctrl_should_block_url(request.URL)) {
+        if (appctrl_should_count_block_for_url(request.URL)) {
+            appctrl_record_block_hit();
+        }
         return nil;
     }
     return orig_wk_loadRequest(self, _cmd, request);
@@ -564,6 +762,9 @@ static id repl_wk_loadRequest(id self, SEL _cmd, NSURLRequest *request) {
 static id (*orig_wk_loadFileURL_allowingReadAccessToURL)(id, SEL, NSURL *, NSURL *);
 static id repl_wk_loadFileURL_allowingReadAccessToURL(id self, SEL _cmd, NSURL *url, NSURL *readAccessURL) {
     if (appctrl_should_block_url(url)) {
+        if (appctrl_should_count_block_for_url(url)) {
+            appctrl_record_block_hit();
+        }
         return nil;
     }
     return orig_wk_loadFileURL_allowingReadAccessToURL(self, _cmd, url, readAccessURL);
@@ -574,6 +775,9 @@ typedef void (*WKDecisionOrigIMP)(id, SEL, WKWebView *, WKNavigationAction *, vo
 static void repl_wkNavigationDelegate_decidePolicy(id self, SEL _cmd, WKWebView *webView, WKNavigationAction *navigationAction, void (^decisionHandler)(WKNavigationActionPolicy)) {
     NSURL *url = navigationAction.request.URL;
     if (appctrl_should_block_url(url)) {
+        if (appctrl_should_count_block_for_url(url)) {
+            appctrl_record_block_hit();
+        }
         if (decisionHandler) {
             decisionHandler(WKNavigationActionPolicyCancel);
         }
@@ -718,11 +922,13 @@ static void appctrl_save_button_position(void) {
 }
 
 static void appctrl_reload_panel_from_disk(void) {
-    if (!gNetworkSwitch || !gDomainsTextView) {
+    if (!gNetworkSwitch || !gDomainsTextView || !gWhiteDomainsTextView) {
         return;
     }
     gNetworkSwitch.on = appctrl_disable_network();
     gDomainsTextView.text = appctrl_domains_file_content();
+    gWhiteDomainsTextView.text = appctrl_white_domains_file_content();
+    appctrl_refresh_block_count_label();
 }
 
 static void appctrl_save_panel_state(void) {
@@ -736,6 +942,8 @@ static void appctrl_save_panel_state(void) {
 
     NSString *domains = gDomainsTextView.text ?: @"";
     [domains writeToFile:appctrl_domains_path() atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSString *whiteDomains = gWhiteDomainsTextView.text ?: @"";
+    [whiteDomains writeToFile:appctrl_white_domains_path() atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
 static void appctrl_toggle_panel(void) {
@@ -859,7 +1067,7 @@ static void appctrl_install_panel(void) {
     [container addSubview:gFloatingButton];
     appctrl_apply_saved_button_position();
 
-    gPanelView = [[UIView alloc] initWithFrame:CGRectMake(16, 188, 320, 260)];
+    gPanelView = [[UIView alloc] initWithFrame:CGRectMake(16, 188, 320, 402)];
     gPanelView.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.96];
     gPanelView.layer.cornerRadius = 14;
     gPanelView.layer.borderWidth = 1;
@@ -880,27 +1088,44 @@ static void appctrl_install_panel(void) {
     gNetworkSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(244, 44, 0, 0)];
     [gPanelView addSubview:gNetworkSwitch];
 
-    UILabel *domainsLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 84, 220, 20)];
+    gBlockCountLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 72, 296, 20)];
+    gBlockCountLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+    gBlockCountLabel.textColor = UIColor.secondaryLabelColor;
+    [gPanelView addSubview:gBlockCountLabel];
+
+    UILabel *domainsLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 100, 220, 20)];
     domainsLabel.text = @"Blocked domains";
     domainsLabel.font = [UIFont systemFontOfSize:15];
     [gPanelView addSubview:domainsLabel];
 
-    gDomainsTextView = [[UITextView alloc] initWithFrame:CGRectMake(12, 110, 296, 100)];
+    gDomainsTextView = [[UITextView alloc] initWithFrame:CGRectMake(12, 126, 296, 92)];
     gDomainsTextView.font = [UIFont systemFontOfSize:14];
     gDomainsTextView.layer.borderWidth = 1;
     gDomainsTextView.layer.borderColor = [UIColor colorWithWhite:0.84 alpha:1.0].CGColor;
     gDomainsTextView.layer.cornerRadius = 8;
     [gPanelView addSubview:gDomainsTextView];
 
+    UILabel *whiteDomainsLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 226, 220, 20)];
+    whiteDomainsLabel.text = @"White domains";
+    whiteDomainsLabel.font = [UIFont systemFontOfSize:15];
+    [gPanelView addSubview:whiteDomainsLabel];
+
+    gWhiteDomainsTextView = [[UITextView alloc] initWithFrame:CGRectMake(12, 252, 296, 92)];
+    gWhiteDomainsTextView.font = [UIFont systemFontOfSize:14];
+    gWhiteDomainsTextView.layer.borderWidth = 1;
+    gWhiteDomainsTextView.layer.borderColor = [UIColor colorWithWhite:0.84 alpha:1.0].CGColor;
+    gWhiteDomainsTextView.layer.cornerRadius = 8;
+    [gPanelView addSubview:gWhiteDomainsTextView];
+
     UIButton *save = appctrl_button(@"Save", @selector(savePressed), gPanelTarget);
-    save.frame = CGRectMake(12, 222, 90, 30);
+    save.frame = CGRectMake(12, 356, 90, 30);
     [gPanelView addSubview:save];
 
     UIButton *reload = appctrl_button(@"Reload", @selector(reloadPressed), gPanelTarget);
-    reload.frame = CGRectMake(112, 222, 90, 30);
+    reload.frame = CGRectMake(112, 356, 90, 30);
     [gPanelView addSubview:reload];
 
-    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(210, 220, 96, 34)];
+    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(210, 352, 96, 34)];
     hint.numberOfLines = 2;
     hint.font = [UIFont systemFontOfSize:11];
     hint.textColor = UIColor.secondaryLabelColor;
