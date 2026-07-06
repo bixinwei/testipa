@@ -13,6 +13,7 @@ mkdir -p "$BUILD_DIR" "$OUTPUT_DIR/Payload"
 
 xcodebuild \
   -project "$PROJECT_PATH" \
+  -scheme HelloIPA \
   -target HelloIPA \
   -configuration Release \
   -sdk iphoneos \
