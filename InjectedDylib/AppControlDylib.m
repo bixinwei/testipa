@@ -6,7 +6,7 @@
 static NSString *const AppCtrlStateFileName = @"appctrl_state.plist";
 static NSString *const AppCtrlDomainsFileName = @"appctrl_blocked_domains.txt";
 
-static UIWindow *gPanelWindow;
+static __weak UIWindow *gHostWindow;
 static UIButton *gFloatingButton;
 static UIView *gPanelView;
 static UISwitch *gNetworkSwitch;
@@ -330,8 +330,41 @@ static UIButton *appctrl_button(NSString *title, SEL action, id target) {
 
 static AppCtrlPanelTarget *gPanelTarget;
 
+static UIWindow *appctrl_find_host_window(void) {
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *candidate in UIApplication.sharedApplication.connectedScenes) {
+            if (![candidate isKindOfClass:[UIWindowScene class]]) {
+                continue;
+            }
+
+            UIWindowScene *scene = (UIWindowScene *)candidate;
+            if (scene.activationState != UISceneActivationStateForegroundActive) {
+                continue;
+            }
+
+            for (UIWindow *window in scene.windows) {
+                if (window.isKeyWindow) {
+                    return window;
+                }
+            }
+
+            UIWindow *first = scene.windows.firstObject;
+            if (first) {
+                return first;
+            }
+        }
+    }
+
+    UIWindow *key = UIApplication.sharedApplication.keyWindow;
+    if (key) {
+        return key;
+    }
+
+    return UIApplication.sharedApplication.windows.firstObject;
+}
+
 static void appctrl_install_panel(void) {
-    if (gPanelWindow) {
+    if (gFloatingButton.superview && gPanelView.superview) {
         return;
     }
 
@@ -339,26 +372,16 @@ static void appctrl_install_panel(void) {
         return;
     }
 
-    UIWindowScene *scene = nil;
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *candidate in UIApplication.sharedApplication.connectedScenes) {
-            if ([candidate isKindOfClass:[UIWindowScene class]] && candidate.activationState == UISceneActivationStateForegroundActive) {
-                scene = (UIWindowScene *)candidate;
-                break;
-            }
-        }
+    UIWindow *hostWindow = appctrl_find_host_window();
+    if (!hostWindow) {
+        return;
     }
 
-    CGRect frame = UIScreen.mainScreen.bounds;
-    gPanelWindow = scene ? [[UIWindow alloc] initWithWindowScene:scene] : [[UIWindow alloc] initWithFrame:frame];
-    gPanelWindow.frame = frame;
-    gPanelWindow.backgroundColor = UIColor.clearColor;
-    gPanelWindow.windowLevel = UIWindowLevelAlert + 5;
-    gPanelWindow.hidden = NO;
-
-    UIViewController *vc = [UIViewController new];
-    vc.view.backgroundColor = UIColor.clearColor;
-    gPanelWindow.rootViewController = vc;
+    gHostWindow = hostWindow;
+    UIView *container = hostWindow.rootViewController ? hostWindow.rootViewController.view : hostWindow;
+    if (!container) {
+        container = hostWindow;
+    }
 
     gPanelTarget = [AppCtrlPanelTarget new];
 
@@ -369,7 +392,7 @@ static void appctrl_install_panel(void) {
     [gFloatingButton setTitle:@"AC" forState:UIControlStateNormal];
     [gFloatingButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     [gFloatingButton addTarget:gPanelTarget action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
-    [vc.view addSubview:gFloatingButton];
+    [container addSubview:gFloatingButton];
 
     gPanelView = [[UIView alloc] initWithFrame:CGRectMake(16, 188, 320, 260)];
     gPanelView.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.96];
@@ -377,7 +400,7 @@ static void appctrl_install_panel(void) {
     gPanelView.layer.borderWidth = 1;
     gPanelView.layer.borderColor = [UIColor colorWithWhite:0.82 alpha:1.0].CGColor;
     gPanelView.hidden = YES;
-    [vc.view addSubview:gPanelView];
+    [container addSubview:gPanelView];
 
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(12, 12, 220, 24)];
     title.text = @"App Control";
