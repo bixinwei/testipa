@@ -225,31 +225,6 @@ static BOOL appctrl_should_block_host(NSString *host) {
     return appctrl_host_is_blocked(normalized);
 }
 
-static BOOL appctrl_should_count_block_for_url(NSURL *url) {
-    if (!url) {
-        return NO;
-    }
-
-    NSString *scheme = url.scheme.lowercaseString ?: @"";
-    if (!appctrl_is_network_scheme(scheme)) {
-        return NO;
-    }
-
-    return appctrl_should_block_host(url.host);
-}
-
-static BOOL appctrl_should_count_block_for_hostname(const char *hostname) {
-    if (!hostname || hostname[0] == '\0') {
-        return NO;
-    }
-
-    if (appctrl_hostname_is_loopback(hostname)) {
-        return NO;
-    }
-
-    return appctrl_should_block_host([NSString stringWithUTF8String:hostname]);
-}
-
 static BOOL appctrl_should_block_url(NSURL *url) {
     if (!url) {
         return NO;
@@ -335,6 +310,31 @@ static BOOL appctrl_should_block_socket_address(const struct sockaddr *address) 
     }
 
     return NO;
+}
+
+static BOOL appctrl_should_count_block_for_url(NSURL *url) {
+    if (!url) {
+        return NO;
+    }
+
+    NSString *scheme = url.scheme.lowercaseString ?: @"";
+    if (!appctrl_is_network_scheme(scheme)) {
+        return NO;
+    }
+
+    return appctrl_should_block_host(url.host);
+}
+
+static BOOL appctrl_should_count_block_for_hostname(const char *hostname) {
+    if (!hostname || hostname[0] == '\0') {
+        return NO;
+    }
+
+    if (appctrl_hostname_is_loopback(hostname)) {
+        return NO;
+    }
+
+    return appctrl_should_block_host([NSString stringWithUTF8String:hostname]);
 }
 
 static NSError *appctrl_block_error(void) {
