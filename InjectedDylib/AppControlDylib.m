@@ -27,6 +27,7 @@ static UITextView *gWhiteDomainsTextView;
 static UILabel *gBlockCountLabel;
 
 static char kOrigWKDelegateDecisionKey;
+static char kOrigWKUIDelegateCreateWebViewKey;
 
 static NSString *appctrl_documents_path(void) {
     NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
@@ -50,6 +51,55 @@ static NSDictionary *appctrl_load_state_file(void) {
     return [dict isKindOfClass:[NSDictionary class]] ? dict : @{};
 }
 
+static NSString *appctrl_extract_host_from_rule(NSString *value) {
+    if (![value isKindOfClass:[NSString class]]) {
+        return @"";
+    }
+
+    NSString *trimmed = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length == 0) {
+        return @"";
+    }
+
+    NSURLComponents *components = [NSURLComponents componentsWithString:trimmed];
+    if (components.host.length > 0) {
+        return components.host;
+    }
+
+    NSString *candidate = trimmed;
+    NSRange schemeRange = [candidate rangeOfString:@"://"];
+    if (schemeRange.location != NSNotFound) {
+        candidate = [candidate substringFromIndex:schemeRange.location + schemeRange.length];
+    }
+
+    NSArray<NSString *> *splitters = @[@"/", @"?", @"#"];
+    for (NSString *splitter in splitters) {
+        NSRange range = [candidate rangeOfString:splitter];
+        if (range.location != NSNotFound) {
+            candidate = [candidate substringToIndex:range.location];
+        }
+    }
+
+    NSRange atRange = [candidate rangeOfString:@"@" options:NSBackwardsSearch];
+    if (atRange.location != NSNotFound) {
+        candidate = [candidate substringFromIndex:atRange.location + 1];
+    }
+
+    if ([candidate hasPrefix:@"["]) {
+        NSRange closing = [candidate rangeOfString:@"]"];
+        if (closing.location != NSNotFound) {
+            return [candidate substringWithRange:NSMakeRange(1, closing.location - 1)];
+        }
+    }
+
+    NSArray<NSString *> *parts = [candidate componentsSeparatedByString:@":"];
+    if (parts.count >= 2) {
+        candidate = parts.firstObject ?: candidate;
+    }
+
+    return candidate;
+}
+
 static NSString *appctrl_normalize_host(NSString *host) {
     if (![host isKindOfClass:[NSString class]]) {
         return @"";
@@ -67,7 +117,7 @@ static NSSet<NSString *> *appctrl_domains_from_raw(NSString *raw) {
     NSMutableSet<NSString *> *domains = [NSMutableSet set];
 
     for (NSString *part in parts) {
-        NSString *trimmed = appctrl_normalize_host(part);
+        NSString *trimmed = appctrl_normalize_host(appctrl_extract_host_from_rule(part));
         if (trimmed.length > 0) {
             [domains addObject:trimmed];
         }
@@ -359,6 +409,55 @@ static NSMutableSet<NSNumber *> *appctrl_network_fds(void) {
     return fds;
 }
 
+static NSMutableSet<NSValue *> *appctrl_blocked_nw_connections(void) {
+    static NSMutableSet<NSValue *> *connections;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        connections = [NSMutableSet set];
+    });
+    return connections;
+}
+
+static NSValue *appctrl_nw_connection_key(nw_connection_t connection) {
+    return connection ? [NSValue valueWithPointer:(__bridge const void *)connection] : nil;
+}
+
+static void appctrl_mark_blocked_nw_connection(nw_connection_t connection) {
+    NSValue *key = appctrl_nw_connection_key(connection);
+    if (!key) {
+        return;
+    }
+
+    NSMutableSet<NSValue *> *connections = appctrl_blocked_nw_connections();
+    @synchronized (connections) {
+        [connections addObject:key];
+    }
+}
+
+static void appctrl_unmark_blocked_nw_connection(nw_connection_t connection) {
+    NSValue *key = appctrl_nw_connection_key(connection);
+    if (!key) {
+        return;
+    }
+
+    NSMutableSet<NSValue *> *connections = appctrl_blocked_nw_connections();
+    @synchronized (connections) {
+        [connections removeObject:key];
+    }
+}
+
+static BOOL appctrl_is_blocked_nw_connection(nw_connection_t connection) {
+    NSValue *key = appctrl_nw_connection_key(connection);
+    if (!key) {
+        return NO;
+    }
+
+    NSMutableSet<NSValue *> *connections = appctrl_blocked_nw_connections();
+    @synchronized (connections) {
+        return [connections containsObject:key];
+    }
+}
+
 static void appctrl_mark_network_fd(int fd) {
     if (fd < 0) {
         return;
@@ -608,11 +707,29 @@ static Boolean appctrl_CFWriteStreamOpen(CFWriteStreamRef stream) {
 }
 
 static void appctrl_nw_connection_start(nw_connection_t connection) {
-    if (appctrl_should_block_all_network()) {
+    if (appctrl_should_block_all_network() || appctrl_is_blocked_nw_connection(connection)) {
         nw_connection_cancel(connection);
+        appctrl_unmark_blocked_nw_connection(connection);
         return;
     }
     nw_connection_start(connection);
+}
+
+static nw_connection_t appctrl_nw_connection_create(nw_endpoint_t endpoint, nw_parameters_t parameters) {
+    nw_connection_t connection = nw_connection_create(endpoint, parameters);
+    if (!connection) {
+        return connection;
+    }
+
+    const char *hostname = endpoint ? nw_endpoint_get_hostname(endpoint) : NULL;
+    if (appctrl_should_block_hostname(hostname)) {
+        appctrl_mark_blocked_nw_connection(connection);
+        if (appctrl_should_count_block_for_hostname(hostname)) {
+            appctrl_record_block_hit();
+        }
+    }
+
+    return connection;
 }
 
 #define APPCTRL_INTERPOSE(replacement, replacee) \
@@ -637,6 +754,7 @@ APPCTRL_INTERPOSE(appctrl_CFStreamCreatePairWithSocketToHost, CFStreamCreatePair
 APPCTRL_INTERPOSE(appctrl_CFStreamCreatePairWithSocket, CFStreamCreatePairWithSocket);
 APPCTRL_INTERPOSE(appctrl_CFReadStreamOpen, CFReadStreamOpen);
 APPCTRL_INTERPOSE(appctrl_CFWriteStreamOpen, CFWriteStreamOpen);
+APPCTRL_INTERPOSE(appctrl_nw_connection_create, nw_connection_create);
 APPCTRL_INTERPOSE(appctrl_nw_connection_start, nw_connection_start);
 
 static NSURLSessionDataTask *(*orig_dataTaskWithRequest_completionHandler)(id, SEL, NSURLRequest *, void (^)(NSData *, NSURLResponse *, NSError *));
@@ -793,6 +911,25 @@ static void repl_wkNavigationDelegate_decidePolicy(id self, SEL _cmd, WKWebView 
     }
 }
 
+typedef WKWebView *(*WKCreateWebViewOrigIMP)(id, SEL, WKWebView *, WKWebViewConfiguration *, WKNavigationAction *, WKWindowFeatures *);
+
+static WKWebView *repl_wkUIDelegate_createWebView(id self, SEL _cmd, WKWebView *webView, WKWebViewConfiguration *configuration, WKNavigationAction *navigationAction, WKWindowFeatures *windowFeatures) {
+    NSURL *url = navigationAction.request.URL;
+    if (appctrl_should_block_url(url)) {
+        if (appctrl_should_count_block_for_url(url)) {
+            appctrl_record_block_hit();
+        }
+        return nil;
+    }
+
+    NSValue *origValue = objc_getAssociatedObject(object_getClass(self), &kOrigWKUIDelegateCreateWebViewKey);
+    WKCreateWebViewOrigIMP orig = (WKCreateWebViewOrigIMP)[origValue pointerValue];
+    if (orig) {
+        return orig(self, _cmd, webView, configuration, navigationAction, windowFeatures);
+    }
+    return nil;
+}
+
 static void appctrl_swizzle_navigation_delegate_if_needed(id delegate) {
     if (!delegate) {
         return;
@@ -814,10 +951,37 @@ static void appctrl_swizzle_navigation_delegate_if_needed(id delegate) {
     method_setImplementation(method, (IMP)repl_wkNavigationDelegate_decidePolicy);
 }
 
+static void appctrl_swizzle_ui_delegate_if_needed(id delegate) {
+    if (!delegate) {
+        return;
+    }
+
+    Class cls = object_getClass(delegate);
+    SEL sel = @selector(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:);
+    Method method = class_getInstanceMethod(cls, sel);
+    if (!method) {
+        return;
+    }
+
+    if (objc_getAssociatedObject(cls, &kOrigWKUIDelegateCreateWebViewKey) != nil) {
+        return;
+    }
+
+    IMP orig = method_getImplementation(method);
+    objc_setAssociatedObject(cls, &kOrigWKUIDelegateCreateWebViewKey, [NSValue valueWithPointer:orig], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    method_setImplementation(method, (IMP)repl_wkUIDelegate_createWebView);
+}
+
 static void (*orig_wk_setNavigationDelegate)(id, SEL, id);
 static void repl_wk_setNavigationDelegate(id self, SEL _cmd, id delegate) {
     appctrl_swizzle_navigation_delegate_if_needed(delegate);
     orig_wk_setNavigationDelegate(self, _cmd, delegate);
+}
+
+static void (*orig_wk_setUIDelegate)(id, SEL, id);
+static void repl_wk_setUIDelegate(id self, SEL _cmd, id delegate) {
+    appctrl_swizzle_ui_delegate_if_needed(delegate);
+    orig_wk_setUIDelegate(self, _cmd, delegate);
 }
 
 static void appctrl_swizzle_instance_method(Class cls, SEL sel, IMP repl, IMP *orig) {
@@ -1173,6 +1337,7 @@ static void appctrl_init(void) {
             appctrl_swizzle_instance_method(wkwebview, @selector(loadRequest:), (IMP)repl_wk_loadRequest, (IMP *)&orig_wk_loadRequest);
             appctrl_swizzle_instance_method(wkwebview, @selector(loadFileURL:allowingReadAccessToURL:), (IMP)repl_wk_loadFileURL_allowingReadAccessToURL, (IMP *)&orig_wk_loadFileURL_allowingReadAccessToURL);
             appctrl_swizzle_instance_method(wkwebview, @selector(setNavigationDelegate:), (IMP)repl_wk_setNavigationDelegate, (IMP *)&orig_wk_setNavigationDelegate);
+            appctrl_swizzle_instance_method(wkwebview, @selector(setUIDelegate:), (IMP)repl_wk_setUIDelegate, (IMP *)&orig_wk_setUIDelegate);
         }
 
         [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
