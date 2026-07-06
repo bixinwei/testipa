@@ -21,9 +21,14 @@ jobs:
       - name: Build unsigned app
         run: bash scripts/build_unsigned_ipa.sh
 
-      - name: Upload IPA artifact
+      - name: Build dylib
+        run: bash scripts/build_dylib.sh
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: HelloIPA-unsigned
-          path: build-output/HelloIPA.ipa
+          path: |
+            build-output/HelloIPA.ipa
+            build-output/AppControlDylib.dylib
           if-no-files-found: error

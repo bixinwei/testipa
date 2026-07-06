@@ -5,11 +5,15 @@ Minimal iOS app project.
 Behavior:
 - Launches to a white screen
 - Shows `hello` in black text
+- Has a URL text field
+- Has `Open URL` and `Load WebView` buttons for dylib testing
 
 Files added for GitHub Actions:
 - `.github/workflows/build-ios-unsigned.yml`
 - `scripts/build_unsigned_ipa.sh`
+- `scripts/build_dylib.sh`
 - shared scheme at `HelloIPA.xcodeproj/xcshareddata/xcschemes/HelloIPA.xcscheme`
+- `InjectedDylib/AppControlDylib.m`
 
 Windows + GitHub Actions usage:
 1. Create a new GitHub repository.
@@ -17,12 +21,15 @@ Windows + GitHub Actions usage:
 3. Push to `main` or `master`, or manually run the workflow from the Actions tab.
 4. Wait for the `Build Unsigned iOS IPA` workflow to finish.
 5. Download the artifact named `HelloIPA-unsigned`.
-6. Inside it, you will get `HelloIPA.ipa`.
+6. Inside it, you will get:
+   - `HelloIPA.ipa`
+   - `AppControlDylib.dylib`
 
 What the workflow does:
 - Uses GitHub's cloud macOS runner
 - Builds `HelloIPA.app` with code signing disabled
 - Packs `Payload/HelloIPA.app` into `HelloIPA.ipa`
+- Builds `AppControlDylib.dylib`
 
 Important:
 - This is an unsigned IPA intended for your jailbreak-style workflow.
@@ -35,5 +42,21 @@ Open on macOS with Xcode if needed:
 
 Bundle identifier:
 - `com.example.helloipa`
+
+App control dylib behavior:
+- floating `AC` button overlay
+- runtime panel with:
+  - disable network switch
+  - blocked domains text editor
+  - save/reload buttons
+- hot reads:
+  - `Documents/appctrl_state.plist`
+  - `Documents/appctrl_blocked_domains.txt`
+- hooks:
+  - `NSURLSession`
+  - `NSURLConnection`
+  - `UIApplication openURL`
+  - `WKWebView loadRequest`
+  - `WKNavigationDelegate decidePolicyForNavigationAction`
 # testipa
 hello
