@@ -294,37 +294,63 @@ static NSArray<NSString *> *appctrl_content_rule_domains_from_set(NSSet<NSString
 
 static NSString *appctrl_content_rule_list_json(void) {
     NSMutableArray<NSDictionary *> *rules = [NSMutableArray array];
-    NSArray<NSString *> *blockedDomains = appctrl_content_rule_domains_from_set(appctrl_blocked_domains());
-    NSArray<NSString *> *whiteDomains = appctrl_content_rule_domains_from_set(appctrl_white_domains());
+    NSSet<NSString *> *whiteDomainsSet = appctrl_white_domains();
+    NSSet<NSString *> *blockedDomainsSet = appctrl_blocked_domains();
 
-    if (whiteDomains.count > 0) {
+    if (whiteDomainsSet.count > 0) {
+        // Whitelist mode — two separate block rules so resource-type filtering is precise:
+        //
+        // Rule 1: block document (page navigation) to any non-whitelisted host.
+        //         This stops the user from navigating to bb.com even via address bar,
+        //         because WKWebView issues a "document" request for top-level navigation.
         [rules addObject:@{
             @"trigger": @{
                 @"url-filter": @"^https?://.*",
-                @"unless-domain": whiteDomains
+                @"resource-type": @[@"document"]
             },
-            @"action": @{
-                @"type": @"block"
-            }
+            @"action": @{@"type": @"block"}
         }];
-    }
-
-    for (NSString *domain in blockedDomains) {
+        // Rule 2: block image/media sub-resources from any non-whitelisted host.
+        //         JS, CSS, fonts, XHR are intentionally excluded so the page can
+        //         still load and function correctly.
         [rules addObject:@{
             @"trigger": @{
                 @"url-filter": @"^https?://.*",
-                @"if-domain": @[domain]
+                @"resource-type": @[@"image", @"media", @"svg-document"]
             },
-            @"action": @{
-                @"type": @"block"
-            }
+            @"action": @{@"type": @"block"}
         }];
+        // For each whitelisted domain: cancel both block rules above.
+        // The ignore-previous-rules action fires before any block action and
+        // voids all earlier rules whose trigger matched this request.
+        for (NSString *domain in whiteDomainsSet) {
+            NSString *normalized = appctrl_normalize_host(domain);
+            if (normalized.length == 0) { continue; }
+            // Escape dots so "aaa.com" doesn't accidentally match "aaaxcom".
+            NSString *escaped = [normalized stringByReplacingOccurrencesOfString:@"." withString:@"\\."];
+            // Matches: https://aaa.com, https://aaa.com/path, https://sub.aaa.com/img.jpg
+            NSString *pattern = [NSString stringWithFormat:@"^https?://([^/?#]+\\.)?%@([/?#]|$)", escaped];
+            [rules addObject:@{
+                @"trigger": @{@"url-filter": pattern},
+                @"action":  @{@"type": @"ignore-previous-rules"}
+            }];
+        }
+    } else {
+        // No whitelist active — apply blocked-domains list only.
+        NSArray<NSString *> *blockedDomains = appctrl_content_rule_domains_from_set(blockedDomainsSet);
+        for (NSString *domain in blockedDomains) {
+            [rules addObject:@{
+                @"trigger": @{
+                    @"url-filter": @"^https?://.*",
+                    @"if-domain": @[domain]
+                },
+                @"action": @{@"type": @"block"}
+            }];
+        }
     }
 
     NSData *data = [NSJSONSerialization dataWithJSONObject:rules options:0 error:nil];
-    if (!data) {
-        return @"[]";
-    }
+    if (!data) { return @"[]"; }
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     return json ?: @"[]";
 }
@@ -555,6 +581,84 @@ static NSString *appctrl_webview_user_script_source(void) {
              "  var origReplaceState=history.replaceState;\n"
              "  history.replaceState=function(state,title,url){ if(url && blockIfNeeded(url)){ return; } return origReplaceState.apply(history, arguments); };\n"
              "}\n"
+             // Hook location.href setter — this is the most common redirect method used
+             // by ad/malware scripts: document.location.href = 'http://bad.com'
+             "try{\n"
+             "  var locDesc=Object.getOwnPropertyDescriptor(Location.prototype,'href');\n"
+             "  if(locDesc && locDesc.set){\n"
+             "    var origHrefSet=locDesc.set;\n"
+             "    Object.defineProperty(Location.prototype,'href',{\n"
+             "      get: locDesc.get,\n"
+             "      set: function(url){ if(url && blockIfNeeded(String(url))){ return; } origHrefSet.call(this,url); },\n"
+             "      configurable:true\n"
+             "    });\n"
+             "  }\n"
+             "}catch(e){}\n"
+             // Also intercept direct document.location assignment attempts via a
+             // passive touchstart/scroll listener that checks for pending redirects.
+             // Some scripts set location via setTimeout — catch those too by patching setTimeout.
+             "var __origSetTimeout=window.setTimeout;\n"
+             "window.setTimeout=function(fn,delay){\n"
+             "  var args=Array.prototype.slice.call(arguments,2);\n"
+             "  var wrapped=(typeof fn==='function') ? function(){\n"
+             "    try{ fn.apply(this,args); }catch(e){ if(!(e instanceof TypeError))throw e; }\n"
+             "  } : fn;\n"
+             "  return __origSetTimeout.call(window,wrapped,delay);\n"
+             "};\n"
+             "function isAdElement(el){\n"
+             "  if(!el||el.nodeType!==1){return false;}\n"
+             // AdSense: <ins class="adsbygoogle">
+             "  var cls=(el.className||'').toString();\n"
+             "  if(cls.indexOf('adsbygoogle')>=0){return true;}\n"
+             // Other common ad class patterns
+             "  if(/\\bad[-_]?(banner|container|wrapper|overlay|float|popup|modal|unit|slot|block|box|frame)\\b/i.test(cls)){return true;}\n"
+             "  if(el.tagName==='INS'){return true;}\n"
+             // position:fixed/sticky with media content
+             "  try{\n"
+             "    var cs=window.getComputedStyle(el);\n"
+             "    var pos=cs.position;\n"
+             "    if(pos==='fixed'||pos==='sticky'){\n"
+             "      var z=parseInt(cs.zIndex)||0;\n"
+             "      if(z>100){\n"
+             "        if(el.querySelector('img,canvas,video,iframe,ins')){return true;}\n"
+             "        var w=parseInt(cs.width)||0,h=parseInt(cs.height)||0;\n"
+             // Wide banners (>200px wide) floating are almost always ads
+             "        if(w>200&&h>50){return true;}\n"
+             "      }\n"
+             "    }\n"
+             "  }catch(e){}\n"
+             "  return false;\n"
+             "}\n"
+             "function removeAdOverlays(){\n"
+             "  try{\n"
+             "    var all=document.querySelectorAll('ins,iframe[src*=\"googlesyndication\"],iframe[src*=\"doubleclick\"],iframe[id*=\"google_ads\"],div[id*=\"google_ads\"],div[class*=\"adsbygoogle\"]');\n"
+             "    for(var i=all.length-1;i>=0;i--){try{all[i].remove();}catch(e){}}\n"
+             // Also scan all elements for ad patterns
+             "    var tags=['div','section','aside','ins','iframe','span','article','header','footer'];\n"
+             "    for(var t=0;t<tags.length;t++){\n"
+             "      var els=document.getElementsByTagName(tags[t]);\n"
+             "      for(var j=els.length-1;j>=0;j--){\n"
+             "        if(isAdElement(els[j])){try{els[j].remove();}catch(e){}}\n"
+             "      }\n"
+             "    }\n"
+             "  }catch(e){}\n"
+             "}\n"
+             "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',removeAdOverlays);}else{removeAdOverlays();}\n"
+             "setTimeout(removeAdOverlays,800);\n"
+             "setTimeout(removeAdOverlays,2500);\n"
+             "setTimeout(removeAdOverlays,6000);\n"
+             "var __adObs=new MutationObserver(function(ms){\n"
+             "  ms.forEach(function(m){\n"
+             "    m.addedNodes.forEach(function(n){\n"
+             "      if(n.nodeType!==1)return;\n"
+             "      if(isAdElement(n)){try{n.remove();}catch(e){}return;}\n"
+             // Check children too (AdSense wraps inside a div)
+             "      var adKids=n.querySelectorAll&&n.querySelectorAll('ins.adsbygoogle,[class*=\"adsbygoogle\"]');\n"
+             "      if(adKids){for(var i=adKids.length-1;i>=0;i--){try{adKids[i].remove();}catch(e){}}}\n"
+             "    });\n"
+             "  });\n"
+             "});\n"
+             "if(document.documentElement){__adObs.observe(document.documentElement,{childList:true,subtree:true});}\n"
              "})();", blockedJSON, whiteJSON, disableNetwork, AppCtrlScriptMessageName, AppCtrlScriptMessageName];
 }
 

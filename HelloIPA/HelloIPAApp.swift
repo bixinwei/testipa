@@ -6,8 +6,6 @@ final class BrowserModel: ObservableObject {
     @Published var currentURL: URL? = URL(string: "https://example.com")
     @Published var canGoBack = false
     @Published var canGoForward = false
-    @Published var pageTitle = "HelloIPA Browser"
-    @Published var blockAnimatedImages = false
     @Published var selectedImageURL: String?
 
     weak var webView: BrowserWebView?
@@ -44,14 +42,9 @@ final class BrowserModel: ObservableObject {
         webView?.reload()
     }
 
-    func applyAnimatedImagePolicy() {
-        webView?.setGIFBlockingEnabled(blockAnimatedImages)
-    }
-
     func syncState(from webView: WKWebView) {
         canGoBack = webView.canGoBack
         canGoForward = webView.canGoForward
-        pageTitle = webView.title?.isEmpty == false ? webView.title! : "HelloIPA Browser"
         if let url = webView.url {
             currentURL = url
             urlText = url.absoluteString
@@ -92,9 +85,6 @@ final class BrowserWebView: WKWebView {
     })();
     """
 
-    private var gifRuleList: WKContentRuleList?
-    private var gifBlockingEnabled = false
-
     convenience init(coordinator: EmbeddedWebView.Coordinator) {
         let configuration = WKWebViewConfiguration()
         configuration.userContentController = WKUserContentController()
@@ -102,50 +92,6 @@ final class BrowserWebView: WKWebView {
         let script = WKUserScript(source: Self.imageScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
         configuration.userContentController.addUserScript(script)
         self.init(frame: .zero, configuration: configuration)
-    }
-
-    func setGIFBlockingEnabled(_ enabled: Bool) {
-        if gifBlockingEnabled == enabled {
-            return
-        }
-        gifBlockingEnabled = enabled
-        updateGIFBlockingRule()
-    }
-
-    private func updateGIFBlockingRule() {
-        let controller = configuration.userContentController
-        if #available(iOS 11.0, *) {
-            controller.removeAllContentRuleLists()
-        }
-
-        guard gifBlockingEnabled else {
-            gifRuleList = nil
-            return
-        }
-
-        let rules = """
-        [
-          {
-            "trigger": {
-              "url-filter": ".*\\\\.gif([?#].*)?$",
-              "resource-type": ["image"]
-            },
-            "action": {
-              "type": "block"
-            }
-          }
-        ]
-        """
-
-        WKContentRuleListStore.default().compileContentRuleList(
-            forIdentifier: "helloipa.block.gif",
-            encodedContentRuleList: rules
-        ) { [weak self] ruleList, _ in
-            guard let self, let ruleList else { return }
-            self.gifRuleList = ruleList
-            self.configuration.userContentController.add(ruleList)
-            self.reload()
-        }
     }
 }
 
@@ -162,7 +108,6 @@ struct EmbeddedWebView: UIViewRepresentable {
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         model.attach(webView: webView)
-        webView.setGIFBlockingEnabled(model.blockAnimatedImages)
 
         if let url = model.currentURL {
             webView.load(URLRequest(url: url))
@@ -172,7 +117,6 @@ struct EmbeddedWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: BrowserWebView, context: Context) {
         model.attach(webView: webView)
-        webView.setGIFBlockingEnabled(model.blockAnimatedImages)
 
         guard let targetURL = model.currentURL else { return }
         if webView.url?.absoluteString != targetURL.absoluteString {
@@ -221,19 +165,7 @@ struct ContentView: View {
     @StateObject private var model = BrowserModel()
 
     var body: some View {
-        VStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(model.pageTitle)
-                    .font(.headline)
-                    .lineLimit(1)
-
-                Text(model.currentURL?.absoluteString ?? "No page loaded")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
+        VStack(spacing: 8) {
             HStack(spacing: 8) {
                 TextField("Enter URL", text: $model.urlText)
                     .textInputAutocapitalization(.never)
@@ -271,12 +203,6 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            Toggle("Block GIF", isOn: $model.blockAnimatedImages)
-                .onChange(of: model.blockAnimatedImages) { _ in
-                    model.applyAnimatedImagePolicy()
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
 
             EmbeddedWebView(model: model)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
