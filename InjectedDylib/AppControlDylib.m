@@ -1285,18 +1285,30 @@ static void appctrl_swizzle_navigation_delegate_if_needed(id delegate) {
 
     Class cls = object_getClass(delegate);
     SEL sel = @selector(webView:decidePolicyForNavigationAction:decisionHandler:);
-    Method method = class_getInstanceMethod(cls, sel);
-    if (!method) {
-        return;
-    }
 
+    // Guard: already patched this class.
     if (objc_getAssociatedObject(cls, &kOrigWKDelegateDecisionKey) != nil) {
         return;
     }
 
-    IMP orig = method_getImplementation(method);
-    objc_setAssociatedObject(cls, &kOrigWKDelegateDecisionKey, [NSValue valueWithPointer:orig], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    method_setImplementation(method, (IMP)repl_wkNavigationDelegate_decidePolicy);
+    Method method = class_getInstanceMethod(cls, sel);
+    if (method) {
+        // Delegate already has this method — swizzle it and save the original IMP.
+        IMP orig = method_getImplementation(method);
+        objc_setAssociatedObject(cls, &kOrigWKDelegateDecisionKey, [NSValue valueWithPointer:orig], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        method_setImplementation(method, (IMP)repl_wkNavigationDelegate_decidePolicy);
+    } else {
+        // Delegate does NOT implement the policy method at all — add it dynamically.
+        // Store a sentinel (NULL pointer) so the replacement IMP falls through to "allow"
+        // instead of trying to call a missing orig.
+        objc_setAssociatedObject(cls, &kOrigWKDelegateDecisionKey, [NSValue valueWithPointer:NULL], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        // Fetch the type encoding from the protocol so we don't hard-code it.
+        struct objc_method_description desc = protocol_getMethodDescription(
+            @protocol(WKNavigationDelegate), sel, NO /* optional */, YES /* instance */);
+        const char *types = desc.types;
+        if (!types) { types = "v@:@@@?"; } // fallback
+        class_addMethod(cls, sel, (IMP)repl_wkNavigationDelegate_decidePolicy, types);
+    }
 }
 
 static void appctrl_swizzle_ui_delegate_if_needed(id delegate) {
