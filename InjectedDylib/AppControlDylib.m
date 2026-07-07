@@ -35,6 +35,7 @@ static NSString *const AppCtrlScriptMessageName = @"appctrlBlockNavigation";
 
 static WKContentRuleList *gAppCtrlContentRuleList;
 static NSString *gAppCtrlContentRuleListSignature;
+static NSHashTable *gAppCtrlTrackedContentControllers;
 
 static NSString *appctrl_documents_path(void) {
     NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
@@ -366,12 +367,24 @@ static void appctrl_refresh_content_rule_list_if_needed(void) {
     }
 
     gAppCtrlContentRuleListSignature = [json copy];
+    NSString *compiledSignature = [json copy];
     [[WKContentRuleListStore defaultStore] compileContentRuleListForIdentifier:@"appctrl.dynamic.rules"
                                                          encodedContentRuleList:json
                                                               completionHandler:^(WKContentRuleList * _Nullable contentRuleList, NSError * _Nullable error) {
-        if (contentRuleList && !error) {
+        if (!contentRuleList || error) { return; }
+        dispatch_async(dispatch_get_main_queue(), ^{
             gAppCtrlContentRuleList = contentRuleList;
-        }
+            // Push new rules to every already-existing WKUserContentController.
+            for (WKUserContentController *ctrl in gAppCtrlTrackedContentControllers) {
+                NSString *applied = objc_getAssociatedObject(ctrl, &kAppCtrlAppliedContentRuleSignatureKey);
+                if ([applied isEqualToString:compiledSignature]) { continue; }
+                if ([ctrl respondsToSelector:@selector(removeAllContentRuleLists)]) {
+                    [ctrl removeAllContentRuleLists];
+                }
+                [ctrl addContentRuleList:contentRuleList];
+                objc_setAssociatedObject(ctrl, &kAppCtrlAppliedContentRuleSignatureKey, compiledSignature, OBJC_ASSOCIATION_COPY_NONATOMIC);
+            }
+        });
     }];
 }
 
@@ -605,89 +618,58 @@ static NSString *appctrl_webview_user_script_source(void) {
              "  } : fn;\n"
              "  return __origSetTimeout.call(window,wrapped,delay);\n"
              "};\n"
-             "function isAdElement(el){\n"
-             "  if(!el||el.nodeType!==1){return false;}\n"
-             // AdSense: <ins class="adsbygoogle">
-             "  var cls=(el.className||'').toString();\n"
-             "  if(cls.indexOf('adsbygoogle')>=0){return true;}\n"
-             // Other common ad class patterns
-             "  if(/\\bad[-_]?(banner|container|wrapper|overlay|float|popup|modal|unit|slot|block|box|frame)\\b/i.test(cls)){return true;}\n"
-             "  if(el.tagName==='INS'){return true;}\n"
-             // position:fixed/sticky with media content — check both inline style and computed style
+             // Inject CSS to immediately hide known ad patterns without waiting for JS timing
+             "try{\n"
+             "  var __adStyle=document.createElement('style');\n"
+             "  __adStyle.textContent=\n"
+             "    'ins.adsbygoogle,[class*=\"adsbygoogle\"],ins[class*=\"ad-\"],'\n"
+             "    'iframe[src*=\"googlesyndication\"],iframe[src*=\"doubleclick\"],'\n"
+             "    'div[id*=\"google_ads\"],div[class*=\"google-ads\"]'\n"
+             "    '{display:none!important;visibility:hidden!important;}';\n"
+             "  (document.head||document.documentElement).appendChild(__adStyle);\n"
+             "}catch(e){}\n"
+             // Walk UP from every <video> to find its fixed/sticky ancestor — much more
+             // reliable than scanning top-down because video is only present after render.
+             "function removeVideoAdBanners(){\n"
              "  try{\n"
-             "    var inlinePos=(el.style&&el.style.position)||'';\n"
-             "    var cs=window.getComputedStyle(el);\n"
-             "    var pos=cs.position||inlinePos;\n"
-             "    if(pos==='fixed'||pos==='sticky'||inlinePos==='fixed'||inlinePos==='sticky'){\n"
-             // Any fixed element containing video is almost certainly an ad banner
-             "      if(el.querySelector('video')){return true;}\n"
-             // Fixed element with a close button inside ("关闭", "×", "X", "close") is a popup/banner ad
-             "      var closeBtn=el.querySelector('[class*=\"clos\"],[id*=\"clos\"],[class*=\"关闭\"],[id*=\"关闭\"]');\n"
-             "      if(!closeBtn){\n"
-             "        var btns=el.querySelectorAll('a,button,span,div,i');\n"
-             "        for(var bi=0;bi<btns.length;bi++){\n"
-             "          var bt=btns[bi],txt=(bt.textContent||bt.innerText||'').trim();\n"
-             "          if(txt==='×'||txt==='✕'||txt==='X'||txt==='x'||txt==='关闭'||txt==='Close'||txt==='close'){closeBtn=bt;break;}\n"
-             "        }\n"
-             "      }\n"
-             "      if(closeBtn&&el.querySelector('img,video,iframe,canvas')){return true;}\n"
-             "      var z=parseInt(cs.zIndex)||0;\n"
-             "      if(z>100){\n"
-             "        if(el.querySelector('img,canvas,iframe,ins')){return true;}\n"
-             "        var w=parseInt(cs.width)||0,h=parseInt(cs.height)||0;\n"
-             "        if(w>200&&h>50){return true;}\n"
+             "    var videos=document.querySelectorAll('video');\n"
+             "    for(var vi=0;vi<videos.length;vi++){\n"
+             "      var node=videos[vi];\n"
+             "      while(node&&node!==document.body&&node!==document.documentElement){\n"
+             "        try{\n"
+             "          var p=node.parentNode;\n"
+             "          var cs=window.getComputedStyle(node);\n"
+             "          if(cs.position==='fixed'||cs.position==='sticky'){\n"
+             "            node.remove();break;\n"
+             "          }\n"
+             "          node=p;\n"
+             "        }catch(e2){break;}\n"
              "      }\n"
              "    }\n"
              "  }catch(e){}\n"
-             "  return false;\n"
              "}\n"
+             // Also remove known ad selectors and AdSense ins tags
              "function removeAdOverlays(){\n"
+             "  removeVideoAdBanners();\n"
              "  try{\n"
-             "    var all=document.querySelectorAll('ins,iframe[src*=\"googlesyndication\"],iframe[src*=\"doubleclick\"],iframe[id*=\"google_ads\"],div[id*=\"google_ads\"],div[class*=\"adsbygoogle\"]');\n"
+             "    var sel='ins,ins.adsbygoogle,[class*=\"adsbygoogle\"],'\n"
+             "      +'iframe[src*=\"googlesyndication\"],iframe[src*=\"doubleclick\"],'\n"
+             "      +'div[id*=\"google_ads\"],div[class*=\"google-ads\"]';\n"
+             "    var all=document.querySelectorAll(sel);\n"
              "    for(var i=all.length-1;i>=0;i--){try{all[i].remove();}catch(e){}}\n"
-             // Also scan all elements for ad patterns
-             "    var tags=['div','section','aside','ins','iframe','span','article','header','footer'];\n"
-             "    for(var t=0;t<tags.length;t++){\n"
-             "      var els=document.getElementsByTagName(tags[t]);\n"
-             "      for(var j=els.length-1;j>=0;j--){\n"
-             "        if(isAdElement(els[j])){try{els[j].remove();}catch(e){}}\n"
-             "      }\n"
-             "    }\n"
              "  }catch(e){}\n"
              "}\n"
              "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',removeAdOverlays);}else{removeAdOverlays();}\n"
              "setTimeout(removeAdOverlays,300);\n"
              "setTimeout(removeAdOverlays,800);\n"
              "setTimeout(removeAdOverlays,2000);\n"
-             "setTimeout(removeAdOverlays,4000);\n"
-             "setTimeout(removeAdOverlays,8000);\n"
-             // Periodic sweep for the first 60s — catches ads that load late
-             "var __adSweepCount=0;\n"
-             "var __adSweepTimer=setInterval(function(){\n"
-             "  removeAdOverlays();\n"
-             "  if(++__adSweepCount>=20){clearInterval(__adSweepTimer);}\n"
-             "},3000);\n"
-             "var __adObs=new MutationObserver(function(ms){\n"
-             "  var pending=[];\n"
-             "  ms.forEach(function(m){\n"
-             "    m.addedNodes.forEach(function(n){\n"
-             "      if(n.nodeType===1){pending.push(n);}\n"
-             "    });\n"
-             "  });\n"
-             "  if(!pending.length){return;}\n"
-             // Defer 150ms so CSS is applied before we read getComputedStyle
-             "  __origSetTimeout(function(){\n"
-             "    for(var pi=0;pi<pending.length;pi++){\n"
-             "      var n=pending[pi];\n"
-             "      if(!n.parentNode){continue;}\n"
-             "      if(isAdElement(n)){try{n.remove();}catch(e){}continue;}\n"
-             "      var adKids=n.querySelectorAll&&n.querySelectorAll('ins.adsbygoogle,[class*=\"adsbygoogle\"],div[style*=\"position:fixed\"] video,div[style*=\"position: fixed\"] video');\n"
-             "      if(adKids){for(var i=adKids.length-1;i>=0;i--){\n"
-             "        var ak=adKids[i],ap=ak.closest?ak.closest('div,section,aside'):ak.parentElement;\n"
-             "        try{(ap||ak).remove();}catch(e){}\n"
-             "      }}\n"
-             "    }\n"
-             "  },150);\n"
+             "setTimeout(removeAdOverlays,5000);\n"
+             // Continuous interval — no stop, so late-loading ads are always caught
+             "setInterval(removeAdOverlays,3000);\n"
+             "var __adObsTimer=null;\n"
+             "var __adObs=new MutationObserver(function(){\n"
+             "  if(__adObsTimer){return;}\n"
+             "  __adObsTimer=__origSetTimeout(function(){__adObsTimer=null;removeAdOverlays();},200);\n"
              "});\n"
              "if(document.documentElement){__adObs.observe(document.documentElement,{childList:true,subtree:true});}\n"
              "})();", blockedJSON, whiteJSON, disableNetwork, AppCtrlScriptMessageName, AppCtrlScriptMessageName];
@@ -1103,6 +1085,12 @@ static void appctrl_configure_webview_configuration(WKWebViewConfiguration *conf
             objc_setAssociatedObject(controller, &kAppCtrlAppliedContentRuleSignatureKey, gAppCtrlContentRuleListSignature, OBJC_ASSOCIATION_COPY_NONATOMIC);
         }
     }
+
+    // Track this controller so newly compiled rules can be pushed to it later.
+    if (!gAppCtrlTrackedContentControllers) {
+        gAppCtrlTrackedContentControllers = [NSHashTable weakObjectsHashTable];
+    }
+    [gAppCtrlTrackedContentControllers addObject:controller];
 }
 
 #define APPCTRL_INTERPOSE(replacement, replacee) \
@@ -1540,6 +1528,9 @@ static void appctrl_save_panel_state(void) {
     [domains writeToFile:appctrl_domains_path() atomically:YES encoding:NSUTF8StringEncoding error:nil];
     NSString *whiteDomains = gWhiteDomainsTextView.text ?: @"";
     [whiteDomains writeToFile:appctrl_white_domains_path() atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+    // Re-compile rules immediately so already-open WebViews pick up the change.
+    appctrl_refresh_content_rule_list_if_needed();
 }
 
 static void appctrl_toggle_panel(void) {
