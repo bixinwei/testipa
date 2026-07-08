@@ -791,6 +791,7 @@ static NSString *appctrl_webview_user_script_source(void) {
              "}\n"
              "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',__hideMarkedElements);}else{__hideMarkedElements();}\n"
              "setInterval(__hideMarkedElements,3000);\n"
+             "__log('双击监听器已安装');\n"
              "var __tapCount=0,__tapTarget=null,__tapTimer=null,__tapStartTime=0;\n"
              "document.addEventListener('dblclick',function(e){\n"
              "  var target=e.target;\n"
@@ -858,12 +859,12 @@ static NSString *appctrl_webview_user_script_source(void) {
              "  }catch(e){return '';}\n"
              "}\n"
              "})();",
-             AppCtrlScriptMessageName,  // 第1个: Script entry point reached
-             blockedJSON, whiteJSON, blockedElementsJSON, disableNetwork,  // JSON 数据
-             AppCtrlScriptMessageName,  // 第2个: __log 函数
-             AppCtrlScriptMessageName, AppCtrlScriptMessageName,  // 第3,4个: report 函数
-             AppCtrlScriptMessageName,  // 第5个: dblclick 事件
-             AppCtrlScriptMessageName]; // 第6个: touchend 事件
+             AppCtrlScriptMessageName,  // 1: Script entry point reached
+             blockedJSON, whiteJSON, blockedElementsJSON, disableNetwork,  // 2-5: JSON 数据
+             AppCtrlScriptMessageName,  // 6: __log 函数内的 postMessage
+             AppCtrlScriptMessageName, AppCtrlScriptMessageName,  // 7-8: report 函数（两个占位符）
+             AppCtrlScriptMessageName,  // 9: dblclick 事件的 postMessage
+             AppCtrlScriptMessageName]; // 10: touchend 事件的 postMessage
 }
 
 static NSError *appctrl_block_error(void) {
