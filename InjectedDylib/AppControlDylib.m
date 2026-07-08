@@ -351,6 +351,10 @@ static NSString *appctrl_content_rule_list_json(void) {
     NSSet<NSString *> *blockedDomainsSet = appctrl_blocked_domains();
 
     appctrl_log_to_panel([NSString stringWithFormat:@"内容规则: 白名单=%lu 黑名单=%lu", (unsigned long)whiteDomainsSet.count, (unsigned long)blockedDomainsSet.count]);
+    if (whiteDomainsSet.count > 0) {
+        NSString *domains = [[whiteDomainsSet allObjects] componentsJoinedByString:@", "];
+        appctrl_log_to_panel([NSString stringWithFormat:@"白名单域名: %@", domains]);
+    }
 
     if (whiteDomainsSet.count > 0) {
         // Whitelist mode — two separate block rules so resource-type filtering is precise:
