@@ -20,11 +20,6 @@ final class BrowserModel: ObservableObject {
         webView?.load(URLRequest(url: url))
     }
 
-    func openInSystem() {
-        guard let url = normalizedURL(from: urlText) else { return }
-        UIApplication.shared.open(url)
-    }
-
     func goBack() {
         webView?.goBack()
     }
@@ -172,11 +167,9 @@ struct ContentView: View {
                     .keyboardType(.URL)
                     .autocorrectionDisabled()
                     .textFieldStyle(.roundedBorder)
-
-                Button("Visit") {
-                    model.loadTypedURL()
-                }
-                .buttonStyle(.borderedProminent)
+                    .onSubmit {
+                        model.loadTypedURL()
+                    }
             }
 
             HStack(spacing: 8) {
@@ -194,11 +187,6 @@ struct ContentView: View {
 
                 Button("Reload") {
                     model.reload()
-                }
-                .buttonStyle(.bordered)
-
-                Button("Open Outside") {
-                    model.openInSystem()
                 }
                 .buttonStyle(.bordered)
             }
