@@ -1600,6 +1600,7 @@ static id repl_wk_initWithCoder(id self, SEL _cmd, NSCoder *coder) {
     if ([result isKindOfClass:[WKWebView class]]) {
         WKWebView *webView = (WKWebView *)result;
         appctrl_configure_webview_configuration(webView.configuration);
+        appctrl_track_webview(webView);
         if (webView.UIDelegate) {
             appctrl_swizzle_ui_delegate_if_needed(webView.UIDelegate);
         }
