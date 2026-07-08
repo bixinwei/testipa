@@ -872,7 +872,13 @@ static NSString *appctrl_webview_user_script_source(void) {
              "    return path.join(' > ');\n"
              "  }catch(e){return '';}\n"
              "}\n"
-             "})();", blockedJSON, whiteJSON, blockedElementsJSON, disableNetwork, AppCtrlScriptMessageName, AppCtrlScriptMessageName, AppCtrlScriptMessageName, AppCtrlScriptMessageName, AppCtrlScriptMessageName];
+             "})();",
+             AppCtrlScriptMessageName,  // 第1个: Script entry point reached
+             blockedJSON, whiteJSON, blockedElementsJSON, disableNetwork,  // JSON 数据
+             AppCtrlScriptMessageName,  // 第2个: __log 函数
+             AppCtrlScriptMessageName, AppCtrlScriptMessageName,  // 第3,4个: report 函数
+             AppCtrlScriptMessageName,  // 第5个: dblclick 事件
+             AppCtrlScriptMessageName]; // 第6个: touchend 事件
 }
 
 static NSError *appctrl_block_error(void) {
