@@ -742,6 +742,10 @@ static NSString *appctrl_webview_user_script_source(void) {
              "      }\n"
              "    }catch(e){__log('扫描错误:'+e.message);}\n"
              "  }\n"
+             "  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',scanExistingImages);}else{scanExistingImages();}\n"
+             "  setTimeout(scanExistingImages,1000);\n"
+             "  setTimeout(scanExistingImages,3000);\n"
+             "}\n"
              // CSS: [data-appctrl-ad] hides marked elements; also hide known ad selectors up front.
              "try{\n"
              "  var __adStyle=document.createElement('style');\n"
