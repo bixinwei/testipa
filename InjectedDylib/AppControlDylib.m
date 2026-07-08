@@ -785,9 +785,7 @@ static NSString *appctrl_webview_user_script_source(void) {
              "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',__hideMarkedElements);}else{__hideMarkedElements();}\n"
              "setInterval(__hideMarkedElements,3000);\n"
              "__log('AppCtrl 双击监听器初始化');\n"
-             // Double-tap to mark element as ad
              "var __tapCount=0,__tapTarget=null,__tapTimer=null,__tapStartTime=0;\n"
-             // 同时监听 dblclick 事件（标准双击）\n"
              "document.addEventListener('dblclick',function(e){\n"
              "  __log('dblclick 事件触发 on '+e.target.tagName);\n"
              "  var target=e.target;\n"
