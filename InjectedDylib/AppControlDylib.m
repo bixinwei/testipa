@@ -567,6 +567,9 @@ static NSString *appctrl_webview_user_script_source(void) {
 
     return [NSString stringWithFormat:
             @"(function(){\n"
+             "try{\n"
+             "  window.webkit.messageHandlers.%@.postMessage({action:'log',message:'Script entry point reached'});\n"
+             "}catch(e){}\n"
              "if(window.__appctrlInstalled){return;}\n"
              "window.__appctrlInstalled=true;\n"
              "var blocked=%@;\n"
@@ -832,7 +835,7 @@ static NSString *appctrl_webview_user_script_source(void) {
              "    return path.join(' > ');\n"
              "  }catch(e){return '';}\n"
              "}\n"
-             "})();", blockedJSON, whiteJSON, blockedElementsJSON, disableNetwork, AppCtrlScriptMessageName, AppCtrlScriptMessageName, AppCtrlScriptMessageName, AppCtrlScriptMessageName];
+             "})();", blockedJSON, whiteJSON, blockedElementsJSON, disableNetwork, AppCtrlScriptMessageName, AppCtrlScriptMessageName, AppCtrlScriptMessageName, AppCtrlScriptMessageName, AppCtrlScriptMessageName];
 }
 
 static NSError *appctrl_block_error(void) {
