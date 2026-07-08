@@ -275,6 +275,20 @@ static NSUInteger appctrl_block_count(void) {
     return [count isKindOfClass:[NSNumber class]] ? count.unsignedIntegerValue : 0;
 }
 
+static void appctrl_log_to_panel(NSString *message) {
+    if (!message || !gLogTextView) {
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *timestamp = [NSDateFormatter localizedStringFromDate:[NSDate date]
+                                                             dateStyle:NSDateFormatterNoStyle
+                                                             timeStyle:NSDateFormatterMediumStyle];
+        NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, message];
+        gLogTextView.text = [gLogTextView.text stringByAppendingString:line];
+        [gLogTextView scrollRangeToVisible:NSMakeRange(gLogTextView.text.length, 0)];
+    });
+}
+
 static void appctrl_refresh_block_count_label(void) {
     if (!gBlockCountLabel) {
         return;
@@ -770,9 +784,34 @@ static NSString *appctrl_webview_user_script_source(void) {
              "}\n"
              "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',__hideMarkedElements);}else{__hideMarkedElements();}\n"
              "setInterval(__hideMarkedElements,3000);\n"
-             "__log('AppCtrl double-tap listener initialized');\n"
+             "__log('AppCtrl 双击监听器初始化');\n"
              // Double-tap to mark element as ad
              "var __tapCount=0,__tapTarget=null,__tapTimer=null,__tapStartTime=0;\n"
+             // 同时监听 dblclick 事件（标准双击）\n"
+             "document.addEventListener('dblclick',function(e){\n"
+             "  __log('dblclick 事件触发 on '+e.target.tagName);\n"
+             "  var target=e.target;\n"
+             "  if(!target||target===document.body||target===document.documentElement){\n"
+             "    __log('忽略 body/html 双击');\n"
+             "    return;\n"
+             "  }\n"
+             "  __log('显示确认对话框');\n"
+             "  if(confirm('标记此元素为广告并在此网站隐藏?')){\n"
+             "    __log('用户确认');\n"
+             "    var sel=__genSelector(target);\n"
+             "    __log('生成选择器: '+sel);\n"
+             "    if(sel){\n"
+             "      __markAd(target);\n"
+             "      __log('发送 markAdElement 消息');\n"
+             "      window.webkit.messageHandlers.%@.postMessage({\n"
+             "        action:'markAdElement',\n"
+             "        domain:window.location.hostname.toLowerCase(),\n"
+             "        selector:sel\n"
+             "      });\n"
+             "      __log('消息发送成功');\n"
+             "    }else{__log('选择器生成失败');}\n"
+             "  }else{__log('用户取消');}\n"
+             "},true);\n"
              "document.addEventListener('touchstart',function(e){\n"
              "  __tapStartTime=Date.now();\n"
              "  var target=e.target;\n"
@@ -782,37 +821,37 @@ static NSString *appctrl_webview_user_script_source(void) {
              "  var now=Date.now();\n"
              "  var duration=now-__tapStartTime;\n"
              "  var target=e.target;\n"
-             "  __log('touchend on '+target.tagName+' (duration:'+duration+'ms)');\n"
+             "  __log('touchend on '+target.tagName+' (持续:'+duration+'ms)');\n"
              "  if(target===__tapTarget){\n"
              "    __tapCount++;\n"
-             "    __log('Tap count: '+__tapCount+' on '+target.tagName);\n"
+             "    __log('点击次数: '+__tapCount+' on '+target.tagName);\n"
              "  }else{\n"
              "    __tapCount=1;\n"
              "    __tapTarget=target;\n"
-             "    __log('First tap on '+target.tagName);\n"
+             "    __log('第一次点击 '+target.tagName);\n"
              "  }\n"
              "  clearTimeout(__tapTimer);\n"
              "  if(__tapCount>=2){\n"
-             "    __log('Double-tap detected, calling preventDefault');\n"
+             "    __log('检测到双击, 调用 preventDefault');\n"
              "    e.preventDefault();\n"
              "    e.stopPropagation();\n"
-             "    if(!target||target===document.body||target===document.documentElement){__log('Ignoring body/html');__tapCount=0;return;}\n"
-             "    __log('Showing confirm dialog');\n"
-             "    if(confirm('Mark this element as ad and hide it on this site?')){\n"
-             "      __log('User confirmed');\n"
+             "    if(!target||target===document.body||target===document.documentElement){__log('忽略 body/html');__tapCount=0;return;}\n"
+             "    __log('显示确认对话框');\n"
+             "    if(confirm('标记此元素为广告并在此网站隐藏?')){\n"
+             "      __log('用户确认');\n"
              "      var sel=__genSelector(target);\n"
-             "      __log('Generated selector: '+sel);\n"
+             "      __log('生成选择器: '+sel);\n"
              "      if(sel){\n"
              "        __markAd(target);\n"
-             "        __log('Sending markAdElement message');\n"
+             "        __log('发送 markAdElement 消息');\n"
              "        window.webkit.messageHandlers.%@.postMessage({\n"
              "          action:'markAdElement',\n"
              "          domain:window.location.hostname.toLowerCase(),\n"
              "          selector:sel\n"
              "        });\n"
-             "        __log('Message sent successfully');\n"
-             "      }else{__log('Selector generation failed');}\n"
-             "    }else{__log('User cancelled');}\n"
+             "        __log('消息发送成功');\n"
+             "      }else{__log('选择器生成失败');}\n"
+             "    }else{__log('用户取消');}\n"
              "    __tapCount=0;__tapTarget=null;\n"
              "  }else{\n"
              "    __tapTimer=__origSetTimeout(function(){__tapCount=0;__tapTarget=null;},500);\n"
@@ -1189,6 +1228,8 @@ static nw_connection_t appctrl_nw_connection_create(nw_endpoint_t endpoint, nw_p
 @implementation AppCtrlScriptMessageHandler
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+    appctrl_log_to_panel([NSString stringWithFormat:@"收到消息: %@", message.name]);
+
     if (![message.name isEqualToString:AppCtrlScriptMessageName]) {
         return;
     }
@@ -1197,9 +1238,11 @@ static nw_connection_t appctrl_nw_connection_create(nw_endpoint_t endpoint, nw_p
     if ([body isKindOfClass:[NSDictionary class]]) {
         NSDictionary *dict = (NSDictionary *)body;
         NSString *action = dict[@"action"];
+
         if ([action isEqualToString:@"markAdElement"]) {
             NSString *domain = dict[@"domain"];
             NSString *selector = dict[@"selector"];
+            appctrl_log_to_panel([NSString stringWithFormat:@"标记广告元素 - domain: %@, selector: %@", domain, selector]);
             if (domain && selector) {
                 appctrl_save_blocked_element(domain, selector);
             }
@@ -1207,15 +1250,8 @@ static nw_connection_t appctrl_nw_connection_create(nw_endpoint_t endpoint, nw_p
         }
         if ([action isEqualToString:@"log"]) {
             NSString *logMsg = dict[@"message"];
-            if (logMsg && gLogTextView) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    NSString *timestamp = [NSDateFormatter localizedStringFromDate:[NSDate date]
-                                                                         dateStyle:NSDateFormatterNoStyle
-                                                                         timeStyle:NSDateFormatterMediumStyle];
-                    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, logMsg];
-                    gLogTextView.text = [gLogTextView.text stringByAppendingString:line];
-                    [gLogTextView scrollRangeToVisible:NSMakeRange(gLogTextView.text.length, 0)];
-                });
+            if (logMsg) {
+                appctrl_log_to_panel(logMsg);
             }
             return;
         }
@@ -1237,6 +1273,8 @@ static void appctrl_configure_webview_configuration(WKWebViewConfiguration *conf
         return;
     }
 
+    appctrl_log_to_panel(@"配置 WKWebView");
+
     appctrl_refresh_content_rule_list_if_needed();
 
     if (!configuration.userContentController) {
@@ -1245,6 +1283,7 @@ static void appctrl_configure_webview_configuration(WKWebViewConfiguration *conf
 
     if (!gScriptMessageHandler) {
         gScriptMessageHandler = [AppCtrlScriptMessageHandler new];
+        appctrl_log_to_panel(@"创建消息处理器");
     }
 
     WKUserContentController *controller = configuration.userContentController;
@@ -1255,11 +1294,13 @@ static void appctrl_configure_webview_configuration(WKWebViewConfiguration *conf
         } @catch (__unused NSException *exception) {
         }
         [controller addScriptMessageHandler:gScriptMessageHandler name:AppCtrlScriptMessageName];
+        appctrl_log_to_panel([NSString stringWithFormat:@"添加消息处理器: %@", AppCtrlScriptMessageName]);
 
         WKUserScript *script = [[WKUserScript alloc] initWithSource:appctrl_webview_user_script_source()
                                                       injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                    forMainFrameOnly:NO];
         [controller addUserScript:script];
+        appctrl_log_to_panel(@"添加用户脚本");
         objc_setAssociatedObject(configuration, &kAppCtrlWebViewConfiguredKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
@@ -1919,9 +1960,13 @@ static void appctrl_install_panel(void) {
     gLogTextView.layer.cornerRadius = 8;
     gLogTextView.editable = NO;
     gLogTextView.backgroundColor = [UIColor colorWithWhite:0.95 alpha:1.0];
+    gLogTextView.text = @"[Init] 日志面板已初始化\n";
     [gPanelView addSubview:gLogTextView];
 
     appctrl_reload_panel_from_disk();
+
+    // 面板安装完成后立即记录
+    appctrl_log_to_panel(@"AC 面板安装完成");
 }
 
 static void appctrl_schedule_panel_install(void) {
