@@ -24,6 +24,7 @@ static UIView *gPanelView;
 static UISwitch *gNetworkSwitch;
 static UITextView *gDomainsTextView;
 static UITextView *gWhiteDomainsTextView;
+static UITextView *gLogTextView;
 static UILabel *gBlockCountLabel;
 
 static char kOrigWKDelegateDecisionKey;
@@ -573,6 +574,11 @@ static NSString *appctrl_webview_user_script_source(void) {
              "var blockedElements=%@;\n"
              "var disableNetwork=%@;\n"
              "var schemes={http:1,https:1,ws:1,wss:1,ftp:1,ftps:1};\n"
+             "function __log(msg){\n"
+             "  try{\n"
+             "    window.webkit.messageHandlers.%@.postMessage({action:'log',message:msg});\n"
+             "  }catch(e){}\n"
+             "}\n"
              "function normalizeHost(host){return (host||'').toLowerCase().replace(/\\.+$/,'').trim();}\n"
              "function matches(host,rule){return host===rule || host.slice(-(rule.length+1))==='.'+rule;}\n"
              "function shouldBlock(urlString){\n"
@@ -761,21 +767,42 @@ static NSString *appctrl_webview_user_script_source(void) {
              "}\n"
              "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',__hideMarkedElements);}else{__hideMarkedElements();}\n"
              "setInterval(__hideMarkedElements,3000);\n"
-             // Long-press (contextmenu) to mark element as ad
-             "document.addEventListener('contextmenu',function(e){\n"
-             "  e.preventDefault();\n"
-             "  var el=e.target;\n"
-             "  if(!el||el===document.body||el===document.documentElement)return;\n"
-             "  if(confirm('Mark this element as ad and hide it on this site?')){\n"
-             "    var sel=__genSelector(el);\n"
-             "    if(sel){\n"
-             "      __markAd(el);\n"
-             "      window.webkit.messageHandlers.%@.postMessage({\n"
-             "        action:'markAdElement',\n"
-             "        domain:window.location.hostname.toLowerCase(),\n"
-             "        selector:sel\n"
-             "      });\n"
-             "    }\n"
+             // Double-tap to mark element as ad
+             "var __tapCount=0,__tapTarget=null,__tapTimer=null;\n"
+             "document.addEventListener('touchend',function(e){\n"
+             "  var target=e.target;\n"
+             "  if(target===__tapTarget){\n"
+             "    __tapCount++;\n"
+             "    __log('Tap count: '+__tapCount+' on '+target.tagName);\n"
+             "  }else{\n"
+             "    __tapCount=1;\n"
+             "    __tapTarget=target;\n"
+             "    __log('First tap on '+target.tagName);\n"
+             "  }\n"
+             "  clearTimeout(__tapTimer);\n"
+             "  if(__tapCount>=2){\n"
+             "    __log('Double-tap detected, calling preventDefault');\n"
+             "    e.preventDefault();\n"
+             "    if(!target||target===document.body||target===document.documentElement){__log('Ignoring body/html');__tapCount=0;return;}\n"
+             "    __log('Showing confirm dialog');\n"
+             "    if(confirm('Mark this element as ad and hide it on this site?')){\n"
+             "      __log('User confirmed');\n"
+             "      var sel=__genSelector(target);\n"
+             "      __log('Generated selector: '+sel);\n"
+             "      if(sel){\n"
+             "        __markAd(target);\n"
+             "        __log('Sending markAdElement message');\n"
+             "        window.webkit.messageHandlers.%@.postMessage({\n"
+             "          action:'markAdElement',\n"
+             "          domain:window.location.hostname.toLowerCase(),\n"
+             "          selector:sel\n"
+             "        });\n"
+             "        __log('Message sent successfully');\n"
+             "      }else{__log('Selector generation failed');}\n"
+             "    }else{__log('User cancelled');}\n"
+             "    __tapCount=0;__tapTarget=null;\n"
+             "  }else{\n"
+             "    __tapTimer=__origSetTimeout(function(){__tapCount=0;__tapTarget=null;},500);\n"
              "  }\n"
              "},true);\n"
              // Generate unique CSS selector for an element
@@ -795,7 +822,7 @@ static NSString *appctrl_webview_user_script_source(void) {
              "    return path.join(' > ');\n"
              "  }catch(e){return '';}\n"
              "}\n"
-             "})();", blockedJSON, whiteJSON, blockedElementsJSON, disableNetwork, AppCtrlScriptMessageName, AppCtrlScriptMessageName, AppCtrlScriptMessageName];
+             "})();", blockedJSON, whiteJSON, blockedElementsJSON, disableNetwork, AppCtrlScriptMessageName, AppCtrlScriptMessageName, AppCtrlScriptMessageName, AppCtrlScriptMessageName];
 }
 
 static NSError *appctrl_block_error(void) {
@@ -1162,6 +1189,20 @@ static nw_connection_t appctrl_nw_connection_create(nw_endpoint_t endpoint, nw_p
             NSString *selector = dict[@"selector"];
             if (domain && selector) {
                 appctrl_save_blocked_element(domain, selector);
+            }
+            return;
+        }
+        if ([action isEqualToString:@"log"]) {
+            NSString *logMsg = dict[@"message"];
+            if (logMsg && gLogTextView) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    NSString *timestamp = [NSDateFormatter localizedStringFromDate:[NSDate date]
+                                                                         dateStyle:NSDateFormatterNoStyle
+                                                                         timeStyle:NSDateFormatterMediumStyle];
+                    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, logMsg];
+                    gLogTextView.text = [gLogTextView.text stringByAppendingString:line];
+                    [gLogTextView scrollRangeToVisible:NSMakeRange(gLogTextView.text.length, 0)];
+                });
             }
             return;
         }
@@ -1788,7 +1829,7 @@ static void appctrl_install_panel(void) {
     [container addSubview:gFloatingButton];
     appctrl_apply_saved_button_position();
 
-    gPanelView = [[UIView alloc] initWithFrame:CGRectMake(16, 188, 320, 402)];
+    gPanelView = [[UIView alloc] initWithFrame:CGRectMake(16, 188, 320, 550)];
     gPanelView.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.96];
     gPanelView.layer.cornerRadius = 14;
     gPanelView.layer.borderWidth = 1;
@@ -1852,6 +1893,20 @@ static void appctrl_install_panel(void) {
     hint.textColor = UIColor.secondaryLabelColor;
     hint.text = @"one per line\nor comma";
     [gPanelView addSubview:hint];
+
+    UILabel *logLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 394, 220, 20)];
+    logLabel.text = @"Debug Log";
+    logLabel.font = [UIFont systemFontOfSize:15];
+    [gPanelView addSubview:logLabel];
+
+    gLogTextView = [[UITextView alloc] initWithFrame:CGRectMake(12, 420, 296, 110)];
+    gLogTextView.font = [UIFont systemFontOfSize:12];
+    gLogTextView.layer.borderWidth = 1;
+    gLogTextView.layer.borderColor = [UIColor colorWithWhite:0.84 alpha:1.0].CGColor;
+    gLogTextView.layer.cornerRadius = 8;
+    gLogTextView.editable = NO;
+    gLogTextView.backgroundColor = [UIColor colorWithWhite:0.95 alpha:1.0];
+    [gPanelView addSubview:gLogTextView];
 
     appctrl_reload_panel_from_disk();
 }
