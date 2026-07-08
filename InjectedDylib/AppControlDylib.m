@@ -37,6 +37,7 @@ static NSString *const AppCtrlScriptMessageName = @"appctrlBlockNavigation";
 static WKContentRuleList *gAppCtrlContentRuleList;
 static NSString *gAppCtrlContentRuleListSignature;
 static NSHashTable *gAppCtrlTrackedContentControllers;
+static NSHashTable *gAppCtrlTrackedWebViews;
 
 static NSString *appctrl_documents_path(void) {
     NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
@@ -1271,6 +1272,16 @@ static void appctrl_configure_webview_configuration(WKWebViewConfiguration *conf
     [gAppCtrlTrackedContentControllers addObject:controller];
 }
 
+static void appctrl_track_webview(WKWebView *webView) {
+    if (!webView) {
+        return;
+    }
+    if (!gAppCtrlTrackedWebViews) {
+        gAppCtrlTrackedWebViews = [NSHashTable weakObjectsHashTable];
+    }
+    [gAppCtrlTrackedWebViews addObject:webView];
+}
+
 #define APPCTRL_INTERPOSE(replacement, replacee) \
     __attribute__((used)) static struct { const void *replacement; const void *replacee; } _appctrl_interpose_##replacee \
     __attribute__((section("__DATA,__interpose"))) = { (const void *)(unsigned long)&replacement, (const void *)(unsigned long)&replacee }
@@ -1556,6 +1567,7 @@ static id repl_wk_initWithFrame_configuration(id self, SEL _cmd, CGRect frame, W
     id result = orig_wk_initWithFrame_configuration(self, _cmd, frame, configuration);
     if ([result isKindOfClass:[WKWebView class]]) {
         WKWebView *webView = (WKWebView *)result;
+        appctrl_track_webview(webView);
         if (webView.UIDelegate) {
             appctrl_swizzle_ui_delegate_if_needed(webView.UIDelegate);
         }
@@ -1709,6 +1721,22 @@ static void appctrl_save_panel_state(void) {
 
     // Re-compile rules immediately so already-open WebViews pick up the change.
     appctrl_refresh_content_rule_list_if_needed();
+
+    // Restart ad scanning in all already-open WebViews with new white/blocked lists.
+    if (gAppCtrlTrackedWebViews && gAppCtrlTrackedWebViews.count > 0) {
+        NSString *whiteJSON = appctrl_json_array_from_domains(appctrl_white_domains());
+        NSString *blockedJSON = appctrl_json_array_from_domains(appctrl_blocked_domains());
+        NSString *jsCode = [NSString stringWithFormat:
+            @"if(window.__appctrlRestartScan){window.__appctrlRestartScan(%@,%@);}",
+            whiteJSON, blockedJSON];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            for (WKWebView *webView in gAppCtrlTrackedWebViews) {
+                [webView evaluateJavaScript:jsCode completionHandler:nil];
+            }
+        });
+        appctrl_log_to_panel([NSString stringWithFormat:@"已向 %lu 个 WebView 发送规则更新", (unsigned long)gAppCtrlTrackedWebViews.count]);
+    }
 }
 
 static void appctrl_toggle_panel(void) {
