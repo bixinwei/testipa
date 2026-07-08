@@ -46,6 +46,10 @@ static NSString *appctrl_state_path(void) {
     return [appctrl_documents_path() stringByAppendingPathComponent:AppCtrlStateFileName];
 }
 
+static NSString *appctrl_blocked_elements_path(void) {
+    return [appctrl_documents_path() stringByAppendingPathComponent:@"appctrl_blocked_elements.json"];
+}
+
 static NSString *appctrl_domains_path(void) {
     return [appctrl_documents_path() stringByAppendingPathComponent:AppCtrlDomainsFileName];
 }
@@ -179,6 +183,32 @@ static NSString *appctrl_white_domains_file_content(void) {
 
 static NSSet<NSString *> *appctrl_white_domains(void) {
     return appctrl_domains_from_raw(appctrl_white_domains_file_content());
+}
+
+static NSArray *appctrl_load_blocked_elements(void) {
+    NSString *path = appctrl_blocked_elements_path();
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (!data) { return @[]; }
+    NSArray *arr = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    return [arr isKindOfClass:[NSArray class]] ? arr : @[];
+}
+
+static void appctrl_save_blocked_element(NSString *domain, NSString *selector) {
+    if (!domain || !selector) { return; }
+    NSMutableArray *list = [appctrl_load_blocked_elements() mutableCopy];
+    NSDictionary *entry = @{@"domain": domain, @"selector": selector};
+    [list addObject:entry];
+    NSData *data = [NSJSONSerialization dataWithJSONObject:list options:NSJSONWritingPrettyPrinted error:nil];
+    if (data) {
+        [data writeToFile:appctrl_blocked_elements_path() atomically:YES];
+    }
+}
+
+static NSString *appctrl_blocked_elements_json(void) {
+    NSArray *list = appctrl_load_blocked_elements();
+    NSData *data = [NSJSONSerialization dataWithJSONObject:list options:0 error:nil];
+    if (!data) { return @"[]"; }
+    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"[]";
 }
 
 static BOOL appctrl_host_matches_rule(NSString *host, NSString *rule) {
@@ -531,6 +561,7 @@ static void appctrl_handle_script_blocked_url_string(NSString *urlString) {
 static NSString *appctrl_webview_user_script_source(void) {
     NSString *blockedJSON = appctrl_json_array_from_domains(appctrl_blocked_domains());
     NSString *whiteJSON = appctrl_json_array_from_domains(appctrl_white_domains());
+    NSString *blockedElementsJSON = appctrl_blocked_elements_json();
     NSString *disableNetwork = appctrl_should_block_all_network() ? @"true" : @"false";
 
     return [NSString stringWithFormat:
@@ -539,6 +570,7 @@ static NSString *appctrl_webview_user_script_source(void) {
              "window.__appctrlInstalled=true;\n"
              "var blocked=%@;\n"
              "var white=%@;\n"
+             "var blockedElements=%@;\n"
              "var disableNetwork=%@;\n"
              "var schemes={http:1,https:1,ws:1,wss:1,ftp:1,ftps:1};\n"
              "function normalizeHost(host){return (host||'').toLowerCase().replace(/\\.+$/,'').trim();}\n"
@@ -618,66 +650,73 @@ static NSString *appctrl_webview_user_script_source(void) {
              "  } : fn;\n"
              "  return __origSetTimeout.call(window,wrapped,delay);\n"
              "};\n"
-             // Inject CSS to immediately hide known ad patterns without waiting for JS timing
+             // CSS: [data-appctrl-ad] hides marked elements; also hide known ad selectors up front.
+             // Using attribute+CSS instead of remove() so ad scripts can't resurrect the element
+             // by re-inserting it — even if the attribute is stripped, MutationObserver re-sets it.
              "try{\n"
              "  var __adStyle=document.createElement('style');\n"
              "  __adStyle.textContent=\n"
+             "    '[data-appctrl-ad]{display:none!important;visibility:hidden!important;pointer-events:none!important;}'\n"
              "    'ins.adsbygoogle,[class*=\"adsbygoogle\"],ins[class*=\"ad-\"],'\n"
              "    'iframe[src*=\"googlesyndication\"],iframe[src*=\"doubleclick\"],'\n"
              "    'div[id*=\"google_ads\"],div[class*=\"google-ads\"]'\n"
              "    '{display:none!important;visibility:hidden!important;}';\n"
              "  (document.head||document.documentElement).appendChild(__adStyle);\n"
              "}catch(e){}\n"
-             // Walk UP from every <video> to find its fixed/sticky ancestor — much more
-             // reliable than scanning top-down because video is only present after render.
+             "function __hasNetRes(el){\n"
+             "  try{\n"
+             "    var t=el.tagName?el.tagName.toLowerCase():'';\n"
+             "    if((t==='img'||t==='video'||t==='iframe'||t==='embed')&&el.src&&el.src.length>0)return true;\n"
+             "    if(t==='canvas')return true;\n"
+             "    if(t==='object'&&el.data&&el.data.length>0)return true;\n"
+             "    var bg=window.getComputedStyle(el).backgroundImage;\n"
+             "    if(bg&&bg!=='none'&&bg.indexOf('url(')!==-1)return true;\n"
+             "    var kids=el.querySelectorAll('img[src],video[src],iframe[src],embed[src],object[data],canvas');\n"
+             "    if(kids.length>0)return true;\n"
+             "  }catch(e){}\n"
+             "  return false;\n"
+             "}\n"
+             "function __markAd(el){\n"
+             "  try{\n"
+             "    el.setAttribute('data-appctrl-ad','1');\n"
+             "    var medias=el.querySelectorAll('video,audio');\n"
+             "    for(var m=0;m<medias.length;m++){try{medias[m].pause();medias[m].src='';}catch(e){}}\n"
+             "  }catch(e){}\n"
+             "}\n"
+             // Walk UP from every <video>/<canvas> to find fixed/sticky ancestor
              "function removeVideoAdBanners(){\n"
              "  try{\n"
-             "    var videos=document.querySelectorAll('video');\n"
-             "    for(var vi=0;vi<videos.length;vi++){\n"
-             "      var node=videos[vi];\n"
+             "    var nodes=document.querySelectorAll('video,canvas');\n"
+             "    for(var vi=0;vi<nodes.length;vi++){\n"
+             "      var node=nodes[vi];\n"
              "      while(node&&node!==document.body&&node!==document.documentElement){\n"
              "        try{\n"
              "          var p=node.parentNode;\n"
              "          var cs=window.getComputedStyle(node);\n"
-             "          if(cs.position==='fixed'||cs.position==='sticky'){\n"
-             "            node.remove();break;\n"
-             "          }\n"
+             "          if(cs.position==='fixed'||cs.position==='sticky'){__markAd(node);break;}\n"
              "          node=p;\n"
              "        }catch(e2){break;}\n"
              "      }\n"
              "    }\n"
              "  }catch(e){}\n"
              "}\n"
-             // Also remove known ad selectors and AdSense ins tags
              "function removeAdOverlays(){\n"
              "  removeVideoAdBanners();\n"
              "  try{\n"
              "    var sel='ins,ins.adsbygoogle,[class*=\"adsbygoogle\"],'\n"
              "      +'iframe[src*=\"googlesyndication\"],iframe[src*=\"doubleclick\"],'\n"
              "      +'div[id*=\"google_ads\"],div[class*=\"google-ads\"]';\n"
-             "    var all=document.querySelectorAll(sel);\n"
-             "    for(var i=all.length-1;i>=0;i--){try{all[i].remove();}catch(e){}}\n"
+             "    var ads=document.querySelectorAll(sel);\n"
+             "    for(var i=ads.length-1;i>=0;i--){__markAd(ads[i]);}\n"
              "  }catch(e){}\n"
-             // Remove fixed/sticky elements that contain network resources (ads heuristic).
-             // Normal navbars/headers rarely embed img/iframe/video; ad banners almost always do.
              "  try{\n"
-             "    function __hasNetRes(el){\n"
-             "      try{\n"
-             "        var t=el.tagName?el.tagName.toLowerCase():'';\n"
-             "        if((t==='img'||t==='video'||t==='iframe'||t==='embed')&&el.src&&el.src.length>0)return true;\n"
-             "        if(t==='object'&&el.data&&el.data.length>0)return true;\n"
-             "        var bg=window.getComputedStyle(el).backgroundImage;\n"
-             "        if(bg&&bg!=='none'&&bg.indexOf('url(')!==-1)return true;\n"
-             "        var kids=el.querySelectorAll('img[src],video[src],iframe[src],embed[src],object[data]');\n"
-             "        if(kids.length>0)return true;\n"
-             "      }catch(e){}\n"
-             "      return false;\n"
-             "    }\n"
              "    var all=document.querySelectorAll('*');\n"
              "    for(var i=all.length-1;i>=0;i--){\n"
              "      try{\n"
-             "        var pos=window.getComputedStyle(all[i]).position;\n"
-             "        if((pos==='fixed'||pos==='sticky')&&__hasNetRes(all[i])){all[i].remove();}\n"
+             "        var el=all[i];\n"
+             "        if(el.getAttribute('data-appctrl-ad')==='1')continue;\n"
+             "        var pos=window.getComputedStyle(el).position;\n"
+             "        if((pos==='fixed'||pos==='sticky')&&__hasNetRes(el)){__markAd(el);}\n"
              "      }catch(e){}\n"
              "    }\n"
              "  }catch(e){}\n"
@@ -687,15 +726,83 @@ static NSString *appctrl_webview_user_script_source(void) {
              "setTimeout(removeAdOverlays,800);\n"
              "setTimeout(removeAdOverlays,2000);\n"
              "setTimeout(removeAdOverlays,5000);\n"
-             // Continuous interval — no stop, so late-loading ads are always caught
              "setInterval(removeAdOverlays,3000);\n"
              "var __adObsTimer=null;\n"
-             "var __adObs=new MutationObserver(function(){\n"
-             "  if(__adObsTimer){return;}\n"
-             "  __adObsTimer=__origSetTimeout(function(){__adObsTimer=null;removeAdOverlays();},200);\n"
+             "var __adObs=new MutationObserver(function(mutations){\n"
+             "  for(var m=0;m<mutations.length;m++){\n"
+             "    var mut=mutations[m];\n"
+             "    if(mut.type==='attributes'&&mut.attributeName==='data-appctrl-ad'){\n"
+             "      try{mut.target.setAttribute('data-appctrl-ad','1');}catch(e){}\n"
+             "      continue;\n"
+             "    }\n"
+             "  }\n"
+             "  if(!__adObsTimer){\n"
+             "    __adObsTimer=__origSetTimeout(function(){__adObsTimer=null;removeAdOverlays();},200);\n"
+             "  }\n"
              "});\n"
-             "if(document.documentElement){__adObs.observe(document.documentElement,{childList:true,subtree:true});}\n"
-             "})();", blockedJSON, whiteJSON, disableNetwork, AppCtrlScriptMessageName, AppCtrlScriptMessageName];
+             "if(document.documentElement){\n"
+             "  __adObs.observe(document.documentElement,{\n"
+             "    childList:true,subtree:true,\n"
+             "    attributes:true,attributeFilter:['data-appctrl-ad']\n"
+             "  });\n"
+             "}\n"
+             // Auto-hide user-marked elements for current domain
+             "function __hideMarkedElements(){\n"
+             "  try{\n"
+             "    var domain=window.location.hostname.toLowerCase();\n"
+             "    for(var i=0;i<blockedElements.length;i++){\n"
+             "      var entry=blockedElements[i];\n"
+             "      if(entry.domain===domain&&entry.selector){\n"
+             "        var els=document.querySelectorAll(entry.selector);\n"
+             "        for(var j=0;j<els.length;j++){__markAd(els[j]);}\n"
+             "      }\n"
+             "    }\n"
+             "  }catch(e){}\n"
+             "}\n"
+             "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',__hideMarkedElements);}else{__hideMarkedElements();}\n"
+             "setInterval(__hideMarkedElements,3000);\n"
+             // Long-press gesture to mark element as ad
+             "var __longPressTarget=null,__longPressTimer=null;\n"
+             "document.addEventListener('touchstart',function(e){\n"
+             "  if(e.touches.length!==1)return;\n"
+             "  __longPressTarget=e.target;\n"
+             "  __longPressTimer=__origSetTimeout(function(){\n"
+             "    if(!__longPressTarget)return;\n"
+             "    var el=__longPressTarget;\n"
+             "    if(confirm('Mark this element as ad and hide it on this site?')){\n"
+             "      var sel=__genSelector(el);\n"
+             "      if(sel){\n"
+             "        __markAd(el);\n"
+             "        window.webkit.messageHandlers.%@.postMessage({\n"
+             "          action:'markAdElement',\n"
+             "          domain:window.location.hostname.toLowerCase(),\n"
+             "          selector:sel\n"
+             "        });\n"
+             "      }\n"
+             "    }\n"
+             "    __longPressTarget=null;\n"
+             "  },800);\n"
+             "},true);\n"
+             "document.addEventListener('touchend',function(){clearTimeout(__longPressTimer);__longPressTarget=null;},true);\n"
+             "document.addEventListener('touchmove',function(){clearTimeout(__longPressTimer);__longPressTarget=null;},true);\n"
+             // Generate unique CSS selector for an element
+             "function __genSelector(el){\n"
+             "  try{\n"
+             "    if(el.id)return '#'+el.id;\n"
+             "    var path=[];\n"
+             "    while(el&&el!==document.body&&el!==document.documentElement){\n"
+             "      var sel=el.tagName.toLowerCase();\n"
+             "      if(el.className&&typeof el.className==='string'){\n"
+             "        var cls=el.className.trim().split(/\\s+/).filter(function(c){return c.length>0;});\n"
+             "        if(cls.length>0)sel+='.'+cls.join('.');\n"
+             "      }\n"
+             "      path.unshift(sel);\n"
+             "      el=el.parentNode;\n"
+             "    }\n"
+             "    return path.join(' > ');\n"
+             "  }catch(e){return '';}\n"
+             "}\n"
+             "})();", blockedJSON, whiteJSON, blockedElementsJSON, disableNetwork, AppCtrlScriptMessageName, AppCtrlScriptMessageName];
 }
 
 static NSError *appctrl_block_error(void) {
@@ -1054,13 +1161,24 @@ static nw_connection_t appctrl_nw_connection_create(nw_endpoint_t endpoint, nw_p
     }
 
     id body = message.body;
-    NSString *urlString = nil;
     if ([body isKindOfClass:[NSDictionary class]]) {
-        urlString = body[@"url"];
+        NSDictionary *dict = (NSDictionary *)body;
+        NSString *action = dict[@"action"];
+        if ([action isEqualToString:@"markAdElement"]) {
+            NSString *domain = dict[@"domain"];
+            NSString *selector = dict[@"selector"];
+            if (domain && selector) {
+                appctrl_save_blocked_element(domain, selector);
+            }
+            return;
+        }
+        NSString *urlString = dict[@"url"];
+        if (urlString) {
+            appctrl_handle_script_blocked_url_string(urlString);
+        }
     } else if ([body isKindOfClass:[NSString class]]) {
-        urlString = body;
+        appctrl_handle_script_blocked_url_string(body);
     }
-    appctrl_handle_script_blocked_url_string(urlString);
 }
 
 @end
