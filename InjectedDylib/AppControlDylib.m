@@ -1291,7 +1291,13 @@ static void appctrl_configure_webview_configuration(WKWebViewConfiguration *conf
     }
 
     WKUserContentController *controller = configuration.userContentController;
-    BOOL alreadyConfigured = (objc_getAssociatedObject(configuration, &kAppCtrlWebViewConfiguredKey) != nil);
+    // 注意：标记必须打在 controller 上，而不是 configuration 上。
+    // 因为有些 App 会先创建 configuration（此时其默认 userContentController 会被我们配置），
+    // 然后再整体替换 configuration.userContentController 为一个新对象。
+    // 如果标记打在 configuration 上，第二次调用会误以为"已配置"，
+    // 导致新的 controller 上永远没有被注入脚本和消息处理器。
+    BOOL alreadyConfigured = (objc_getAssociatedObject(controller, &kAppCtrlWebViewConfiguredKey) != nil);
+    appctrl_log_to_panel([NSString stringWithFormat:@"controller=%p alreadyConfigured=%d", controller, alreadyConfigured]);
     if (!alreadyConfigured) {
         @try {
             [controller removeScriptMessageHandlerForName:AppCtrlScriptMessageName];
@@ -1305,7 +1311,7 @@ static void appctrl_configure_webview_configuration(WKWebViewConfiguration *conf
                                                    forMainFrameOnly:NO];
         [controller addUserScript:script];
         appctrl_log_to_panel(@"添加用户脚本");
-        objc_setAssociatedObject(configuration, &kAppCtrlWebViewConfiguredKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(controller, &kAppCtrlWebViewConfiguredKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
     NSString *appliedSignature = objc_getAssociatedObject(controller, &kAppCtrlAppliedContentRuleSignatureKey);
