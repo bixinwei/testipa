@@ -802,7 +802,7 @@ static NSString *appctrl_webview_user_script_source(void) {
              "    return path.join(' > ');\n"
              "  }catch(e){return '';}\n"
              "}\n"
-             "})();", blockedJSON, whiteJSON, blockedElementsJSON, disableNetwork, AppCtrlScriptMessageName, AppCtrlScriptMessageName];
+             "})();", blockedJSON, whiteJSON, blockedElementsJSON, disableNetwork, AppCtrlScriptMessageName, AppCtrlScriptMessageName, AppCtrlScriptMessageName];
 }
 
 static NSError *appctrl_block_error(void) {
