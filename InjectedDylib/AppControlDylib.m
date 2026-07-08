@@ -780,78 +780,11 @@ static NSString *appctrl_webview_user_script_source(void) {
              "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',removeKnownAds);}else{removeKnownAds();}\n"
              "setTimeout(removeKnownAds,1000);\n"
              "setTimeout(removeKnownAds,3000);\n"
-             // Auto-hide user-marked elements for current domain
-             "function __hideMarkedElements(){\n"
-             "  try{\n"
-             "    var domain=window.location.hostname.toLowerCase();\n"
-             "    for(var i=0;i<blockedElements.length;i++){\n"
-             "      var entry=blockedElements[i];\n"
-             "      if(entry.domain===domain&&entry.selector){\n"
-             "        var els=document.querySelectorAll(entry.selector);\n"
-             "        for(var j=0;j<els.length;j++){__markAd(els[j]);}\n"
-             "      }\n"
-             "    }\n"
-             "  }catch(e){}\n"
-             "}\n"
-             "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',__hideMarkedElements);}else{__hideMarkedElements();}\n"
-             "setInterval(__hideMarkedElements,3000);\n"
-             "__log('双击监听器已安装');\n"
-             "var __tapCount=0,__tapTarget=null,__tapTimer=null,__tapStartTime=0;\n"
-             "document.addEventListener('touchstart',function(e){\n"
-             "  __tapStartTime=Date.now();\n"
-             "},false);\n"
-             "document.addEventListener('touchend',function(e){\n"
-             "  var target=e.target;\n"
-             "  if(target===__tapTarget){\n"
-             "    __tapCount++;\n"
-             "  }else{\n"
-             "    __tapCount=1;\n"
-             "    __tapTarget=target;\n"
-             "  }\n"
-             "  clearTimeout(__tapTimer);\n"
-             "  if(__tapCount>=2){\n"
-             "    e.preventDefault();\n"
-             "    e.stopPropagation();\n"
-             "    __tapCount=0;__tapTarget=null;\n"
-             "    if(!target||target===document.body||target===document.documentElement){return;}\n"
-             "    if(confirm('标记此元素为广告并在此网站隐藏?')){\n"
-             "      var sel=__genSelector(target);\n"
-             "      if(sel){\n"
-             "        __markAd(target);\n"
-             "        window.webkit.messageHandlers.%@.postMessage({\n"
-             "          action:'markAdElement',\n"
-             "          domain:window.location.hostname.toLowerCase(),\n"
-             "          selector:sel\n"
-             "        });\n"
-             "      }\n"
-             "    }\n"
-             "  }else{\n"
-             "    __tapTimer=__origSetTimeout(function(){__tapCount=0;__tapTarget=null;},500);\n"
-             "  }\n"
-             "},false);\n"
-             // Generate unique CSS selector for an element
-             "function __genSelector(el){\n"
-             "  try{\n"
-             "    if(el.id)return '#'+el.id;\n"
-             "    var path=[];\n"
-             "    while(el&&el!==document.body&&el!==document.documentElement){\n"
-             "      var sel=el.tagName.toLowerCase();\n"
-             "      if(el.className&&typeof el.className==='string'){\n"
-             "        var cls=el.className.trim().split(/\\s+/).filter(function(c){return c.length>0;});\n"
-             "        if(cls.length>0)sel+='.'+cls.join('.');\n"
-             "      }\n"
-             "      path.unshift(sel);\n"
-             "      el=el.parentNode;\n"
-             "    }\n"
-             "    return path.join(' > ');\n"
-             "  }catch(e){return '';}\n"
-             "}\n"
              "})();",
              AppCtrlScriptMessageName,  // 1: Script entry point reached
              blockedJSON, whiteJSON, blockedElementsJSON, disableNetwork,  // 2-5: JSON 数据
              AppCtrlScriptMessageName,  // 6: __log 函数内的 postMessage
-             AppCtrlScriptMessageName, AppCtrlScriptMessageName,  // 7-8: report 函数（两个占位符）
-             AppCtrlScriptMessageName]; // 9: touchend 事件的 postMessage (已移除 dblclick)
+             AppCtrlScriptMessageName, AppCtrlScriptMessageName]; // 7-8: report 函数（两个占位符）
 }
 
 static NSError *appctrl_block_error(void) {
@@ -1216,15 +1149,6 @@ static nw_connection_t appctrl_nw_connection_create(nw_endpoint_t endpoint, nw_p
         NSDictionary *dict = (NSDictionary *)body;
         NSString *action = dict[@"action"];
 
-        if ([action isEqualToString:@"markAdElement"]) {
-            NSString *domain = dict[@"domain"];
-            NSString *selector = dict[@"selector"];
-            appctrl_log_to_panel([NSString stringWithFormat:@"标记广告元素 - domain: %@, selector: %@", domain, selector]);
-            if (domain && selector) {
-                appctrl_save_blocked_element(domain, selector);
-            }
-            return;
-        }
         if ([action isEqualToString:@"log"]) {
             NSString *logMsg = dict[@"message"];
             if (logMsg) {
