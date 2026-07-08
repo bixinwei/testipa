@@ -350,6 +350,8 @@ static NSString *appctrl_content_rule_list_json(void) {
     NSSet<NSString *> *whiteDomainsSet = appctrl_white_domains();
     NSSet<NSString *> *blockedDomainsSet = appctrl_blocked_domains();
 
+    appctrl_log_to_panel([NSString stringWithFormat:@"内容规则: 白名单=%lu 黑名单=%lu", (unsigned long)whiteDomainsSet.count, (unsigned long)blockedDomainsSet.count]);
+
     if (whiteDomainsSet.count > 0) {
         // Whitelist mode — two separate block rules so resource-type filtering is precise:
         //
@@ -793,22 +795,6 @@ static NSString *appctrl_webview_user_script_source(void) {
              "setInterval(__hideMarkedElements,3000);\n"
              "__log('双击监听器已安装');\n"
              "var __tapCount=0,__tapTarget=null,__tapTimer=null,__tapStartTime=0;\n"
-             "document.addEventListener('dblclick',function(e){\n"
-             "  var target=e.target;\n"
-             "  if(!target||target===document.body||target===document.documentElement){return;}\n"
-             "  if(confirm('标记此元素为广告并在此网站隐藏?')){\n"
-             "    var sel=__genSelector(target);\n"
-             "    if(sel){\n"
-             "      __markAd(target);\n"
-             "      window.webkit.messageHandlers.%@.postMessage({\n"
-             "        action:'markAdElement',\n"
-             "        domain:window.location.hostname.toLowerCase(),\n"
-             "        selector:sel\n"
-             "      });\n"
-             "    }\n"
-             "  }\n"
-             "},true);\n"
-             // touchstart/touchend 仅用于计时判断双击，不逐次打日志（高频事件，打日志会拖慢主线程）
              "document.addEventListener('touchstart',function(e){\n"
              "  __tapStartTime=Date.now();\n"
              "},false);\n"
@@ -863,8 +849,7 @@ static NSString *appctrl_webview_user_script_source(void) {
              blockedJSON, whiteJSON, blockedElementsJSON, disableNetwork,  // 2-5: JSON 数据
              AppCtrlScriptMessageName,  // 6: __log 函数内的 postMessage
              AppCtrlScriptMessageName, AppCtrlScriptMessageName,  // 7-8: report 函数（两个占位符）
-             AppCtrlScriptMessageName,  // 9: dblclick 事件的 postMessage
-             AppCtrlScriptMessageName]; // 10: touchend 事件的 postMessage
+             AppCtrlScriptMessageName]; // 9: touchend 事件的 postMessage (已移除 dblclick)
 }
 
 static NSError *appctrl_block_error(void) {
