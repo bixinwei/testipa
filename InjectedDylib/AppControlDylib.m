@@ -1670,6 +1670,24 @@ static void appctrl_clamp_floating_button(void) {
     );
 }
 
+static void appctrl_clamp_panel_position(void) {
+    if (!gPanelView || !gPanelView.superview) {
+        return;
+    }
+
+    UIView *container = gPanelView.superview;
+    CGSize boundsSize = container.bounds.size;
+    CGSize panelSize = gPanelView.bounds.size;
+    CGFloat margin = 8.0;
+    CGFloat maxX = boundsSize.width - panelSize.width - margin;
+    CGFloat maxY = boundsSize.height - panelSize.height - margin;
+
+    CGRect frame = gPanelView.frame;
+    frame.origin.x = appctrl_clamp(frame.origin.x, margin, maxX);
+    frame.origin.y = appctrl_clamp(frame.origin.y, margin, maxY);
+    gPanelView.frame = frame;
+}
+
 static void appctrl_position_panel_near_button(void) {
     if (!gFloatingButton || !gPanelView || !gFloatingButton.superview) {
         return;
@@ -1712,6 +1730,29 @@ static void appctrl_apply_saved_button_position(void) {
     appctrl_clamp_floating_button();
 }
 
+static BOOL appctrl_has_saved_panel_position(void) {
+    NSDictionary *state = appctrl_load_state_file();
+    return [state[@"panelOriginX"] isKindOfClass:[NSNumber class]] && [state[@"panelOriginY"] isKindOfClass:[NSNumber class]];
+}
+
+static void appctrl_apply_saved_panel_position(void) {
+    if (!gPanelView) {
+        return;
+    }
+
+    NSDictionary *state = appctrl_load_state_file();
+    NSNumber *x = state[@"panelOriginX"];
+    NSNumber *y = state[@"panelOriginY"];
+    if (![x isKindOfClass:[NSNumber class]] || ![y isKindOfClass:[NSNumber class]]) {
+        return;
+    }
+
+    CGRect frame = gPanelView.frame;
+    frame.origin = CGPointMake(x.doubleValue, y.doubleValue);
+    gPanelView.frame = frame;
+    appctrl_clamp_panel_position();
+}
+
 static void appctrl_save_button_position(void) {
     if (!gFloatingButton) {
         return;
@@ -1721,6 +1762,22 @@ static void appctrl_save_button_position(void) {
     state[@"disableNetwork"] = @(gNetworkSwitch ? gNetworkSwitch.on : appctrl_disable_network());
     state[@"floatingButtonCenterX"] = @(gFloatingButton.center.x);
     state[@"floatingButtonCenterY"] = @(gFloatingButton.center.y);
+    [state writeToFile:appctrl_state_path() atomically:YES];
+}
+
+static void appctrl_save_panel_position(void) {
+    if (!gPanelView) {
+        return;
+    }
+
+    NSMutableDictionary *state = [appctrl_load_state_file() mutableCopy];
+    state[@"disableNetwork"] = @(gNetworkSwitch ? gNetworkSwitch.on : appctrl_disable_network());
+    if (gFloatingButton) {
+        state[@"floatingButtonCenterX"] = @(gFloatingButton.center.x);
+        state[@"floatingButtonCenterY"] = @(gFloatingButton.center.y);
+    }
+    state[@"panelOriginX"] = @(gPanelView.frame.origin.x);
+    state[@"panelOriginY"] = @(gPanelView.frame.origin.y);
     [state writeToFile:appctrl_state_path() atomically:YES];
 }
 
@@ -1740,6 +1797,10 @@ static void appctrl_save_panel_state(void) {
     if (gFloatingButton) {
         state[@"floatingButtonCenterX"] = @(gFloatingButton.center.x);
         state[@"floatingButtonCenterY"] = @(gFloatingButton.center.y);
+    }
+    if (gPanelView) {
+        state[@"panelOriginX"] = @(gPanelView.frame.origin.x);
+        state[@"panelOriginY"] = @(gPanelView.frame.origin.y);
     }
     [state writeToFile:appctrl_state_path() atomically:YES];
 
@@ -1775,7 +1836,11 @@ static void appctrl_toggle_panel(void) {
     gPanelView.hidden = !gPanelView.hidden;
     if (!gPanelView.hidden) {
         appctrl_reload_panel_from_disk();
-        appctrl_position_panel_near_button();
+        if (appctrl_has_saved_panel_position()) {
+            appctrl_apply_saved_panel_position();
+        } else {
+            appctrl_position_panel_near_button();
+        }
     }
 }
 
@@ -1805,6 +1870,12 @@ static UIButton *appctrl_button(NSString *title, SEL action, id target) {
     appctrl_reload_panel_from_disk();
 }
 
+- (void)closePanelPressed {
+    if (gPanelView) {
+        gPanelView.hidden = YES;
+    }
+}
+
 - (void)floatingButtonDragged:(UIPanGestureRecognizer *)recognizer {
     UIView *button = recognizer.view;
     UIView *container = button.superview;
@@ -1821,6 +1892,24 @@ static UIButton *appctrl_button(NSString *title, SEL action, id target) {
 
     if (recognizer.state == UIGestureRecognizerStateEnded || recognizer.state == UIGestureRecognizerStateCancelled) {
         appctrl_save_button_position();
+    }
+}
+
+- (void)panelDragged:(UIPanGestureRecognizer *)recognizer {
+    UIView *panel = recognizer.view;
+    UIView *container = panel.superview;
+    if (!panel || !container) {
+        return;
+    }
+
+    CGPoint translation = [recognizer translationInView:container];
+    panel.center = CGPointMake(panel.center.x + translation.x, panel.center.y + translation.y);
+    [recognizer setTranslation:(CGPoint){0, 0} inView:container];
+
+    appctrl_clamp_panel_position();
+
+    if (recognizer.state == UIGestureRecognizerStateEnded || recognizer.state == UIGestureRecognizerStateCancelled) {
+        appctrl_save_panel_position();
     }
 }
 
@@ -1885,7 +1974,9 @@ static void appctrl_install_panel(void) {
     [gFloatingButton setTitle:@"AC" forState:UIControlStateNormal];
     [gFloatingButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     [gFloatingButton addTarget:gPanelTarget action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
-    [gFloatingButton addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:gPanelTarget action:@selector(floatingButtonDragged:)]];
+    UIPanGestureRecognizer *buttonPan = [[UIPanGestureRecognizer alloc] initWithTarget:gPanelTarget action:@selector(floatingButtonDragged:)];
+    buttonPan.cancelsTouchesInView = NO;
+    [gFloatingButton addGestureRecognizer:buttonPan];
     [container addSubview:gFloatingButton];
     appctrl_apply_saved_button_position();
 
@@ -1895,12 +1986,23 @@ static void appctrl_install_panel(void) {
     gPanelView.layer.borderWidth = 1;
     gPanelView.layer.borderColor = [UIColor colorWithWhite:0.82 alpha:1.0].CGColor;
     gPanelView.hidden = YES;
+    UIPanGestureRecognizer *panelPan = [[UIPanGestureRecognizer alloc] initWithTarget:gPanelTarget action:@selector(panelDragged:)];
+    panelPan.cancelsTouchesInView = NO;
+    [gPanelView addGestureRecognizer:panelPan];
     [container addSubview:gPanelView];
 
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(12, 12, 220, 24)];
     title.text = @"App Control";
     title.font = [UIFont boldSystemFontOfSize:18];
     [gPanelView addSubview:title];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.frame = CGRectMake(276, 8, 36, 36);
+    close.titleLabel.font = [UIFont systemFontOfSize:22 weight:UIFontWeightSemibold];
+    [close setTitle:@"×" forState:UIControlStateNormal];
+    [close setTitleColor:[UIColor colorWithWhite:0.2 alpha:1.0] forState:UIControlStateNormal];
+    [close addTarget:gPanelTarget action:@selector(closePanelPressed) forControlEvents:UIControlEventTouchUpInside];
+    [gPanelView addSubview:close];
 
     UILabel *networkLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 48, 200, 24)];
     networkLabel.text = @"Disable Network";
@@ -1968,6 +2070,8 @@ static void appctrl_install_panel(void) {
     gLogTextView.backgroundColor = [UIColor colorWithWhite:0.95 alpha:1.0];
     gLogTextView.text = @"[Init] 日志面板已初始化\n";
     [gPanelView addSubview:gLogTextView];
+
+    appctrl_apply_saved_panel_position();
 
     appctrl_reload_panel_from_disk();
 

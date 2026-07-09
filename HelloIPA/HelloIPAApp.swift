@@ -6,6 +6,8 @@ final class BrowserModel: ObservableObject {
     @Published var currentURL: URL? = URL(string: "https://example.com")
     @Published var canGoBack = false
     @Published var canGoForward = false
+    @Published var loadProgress: Double = 0
+    @Published var isLoading = false
     @Published var selectedImageURL: String?
 
     weak var webView: BrowserWebView?
@@ -40,10 +42,17 @@ final class BrowserModel: ObservableObject {
     func syncState(from webView: WKWebView) {
         canGoBack = webView.canGoBack
         canGoForward = webView.canGoForward
+        isLoading = webView.isLoading
+        loadProgress = min(max(webView.estimatedProgress, 0), 1)
         if let url = webView.url {
             currentURL = url
             urlText = url.absoluteString
         }
+    }
+
+    func updateProgress(_ value: Double, isLoading: Bool) {
+        loadProgress = min(max(value, 0), 1)
+        self.isLoading = isLoading
     }
 
     private func normalizedURL(from raw: String) -> URL? {
@@ -102,6 +111,7 @@ struct EmbeddedWebView: UIViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
+        context.coordinator.attachObservers(to: webView)
         model.attach(webView: webView)
 
         if let url = model.currentURL {
@@ -121,9 +131,29 @@ struct EmbeddedWebView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         private let model: BrowserModel
+        private var progressObservation: NSKeyValueObservation?
+        private var loadingObservation: NSKeyValueObservation?
 
         init(model: BrowserModel) {
             self.model = model
+        }
+
+        func attachObservers(to webView: WKWebView) {
+            progressObservation = webView.observe(\.estimatedProgress, options: [.initial, .new]) { [weak self] webView, _ in
+                DispatchQueue.main.async {
+                    self?.model.updateProgress(webView.estimatedProgress, isLoading: webView.isLoading)
+                }
+            }
+
+            loadingObservation = webView.observe(\.isLoading, options: [.initial, .new]) { [weak self] webView, _ in
+                DispatchQueue.main.async {
+                    self?.model.updateProgress(webView.estimatedProgress, isLoading: webView.isLoading)
+                }
+            }
+        }
+
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            model.syncState(from: webView)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -131,6 +161,14 @@ struct EmbeddedWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            model.syncState(from: webView)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            model.syncState(from: webView)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             model.syncState(from: webView)
         }
 
@@ -171,6 +209,21 @@ struct ContentView: View {
                         model.loadTypedURL()
                     }
             }
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.gray.opacity(0.16))
+
+                    Capsule()
+                        .fill(Color.green)
+                        .frame(width: geometry.size.width * model.loadProgress)
+                }
+            }
+            .frame(height: 4)
+            .opacity(model.isLoading ? 1 : 0)
+            .animation(.easeInOut(duration: 0.2), value: model.isLoading)
+            .animation(.easeInOut(duration: 0.2), value: model.loadProgress)
 
             HStack(spacing: 8) {
                 Button("Back") {
