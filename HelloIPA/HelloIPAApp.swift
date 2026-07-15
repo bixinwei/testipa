@@ -187,7 +187,7 @@ final class LocalTextShareServer: ObservableObject {
             }
 
             if buffer.count > self.maxRequestSize {
-                let body = "{\"ok\":false,\"error\":\"Request too large\"}"
+                let body = "{\"ok\":false,\"error\":\"文本过长，单次同步内容不能超过 1 MB。\"}"
                 let response = self.httpResponse(
                     statusLine: "HTTP/1.1 413 Payload Too Large\r\n",
                     contentType: "application/json; charset=utf-8",
@@ -318,13 +318,14 @@ final class LocalTextShareServer: ObservableObject {
             button {
               margin-top: 16px;
               border: 0;
-              border-radius: 14px;
-              padding: 14px 18px;
+              border-radius: 16px;
+              padding: 15px 22px;
               font: inherit;
               font-weight: 600;
               background: #1f6feb;
               color: #fff;
               cursor: pointer;
+              box-shadow: 0 12px 24px rgba(31, 111, 235, 0.22);
             }
             .tip {
               margin-top: 14px;
@@ -363,6 +364,7 @@ final class LocalTextShareServer: ObservableObject {
             button.addEventListener('click', async () => {
               button.disabled = true;
               status.textContent = '正在同步...';
+              status.style.color = '#786b5d';
 
               try {
                 const response = await fetch('/sync', {
@@ -374,12 +376,29 @@ final class LocalTextShareServer: ObservableObject {
                 });
 
                 if (!response.ok) {
-                  throw new Error('HTTP ' + response.status);
+                  let message = '同步失败';
+                  try {
+                    const payload = await response.json();
+                    if (payload && payload.error) {
+                      message = payload.error;
+                    }
+                  } catch (_) {
+                    message = response.status === 413
+                      ? '文本过长，无法同步到手机。'
+                      : '手机返回了错误（HTTP ' + response.status + '）';
+                  }
+                  throw new Error(message);
                 }
 
                 status.textContent = '已同步到手机';
+                status.style.color = '#0f5132';
               } catch (error) {
-                status.textContent = '同步失败：' + error.message;
+                const rawMessage = error && error.message ? error.message : '';
+                const message = rawMessage.includes('Failed to fetch')
+                  ? '无法连接到手机，请确认手机分享弹窗仍然打开，且电脑和手机在同一 Wi-Fi 下。'
+                  : rawMessage;
+                status.textContent = '同步失败：' + message;
+                status.style.color = '#b42318';
               } finally {
                 button.disabled = false;
               }
@@ -538,6 +557,7 @@ struct ShareAddressSheet: View {
                     } label: {
                         Label("复制这个地址", systemImage: "doc.on.doc")
                             .frame(maxWidth: .infinity)
+                            .frame(height: 52)
                     }
                     .buttonStyle(.borderedProminent)
 
@@ -611,8 +631,7 @@ struct ContentView: View {
                 } label: {
                     Label("分享文本", systemImage: "network")
                         .font(.headline)
-                        .frame(width: UIScreen.main.bounds.width / 3)
-                        .padding(.vertical, 14)
+                        .frame(width: 148, height: 52)
                 }
                 .buttonStyle(.borderedProminent)
             }
