@@ -454,6 +454,7 @@ final class LocalTextShareServer: ObservableObject {
 struct ShareAddressSheet: View {
     @ObservedObject var server: LocalTextShareServer
     @Environment(\.dismiss) private var dismiss
+    @State private var showingCopiedToast = false
 
     var body: some View {
         NavigationView {
@@ -467,11 +468,19 @@ struct ShareAddressSheet: View {
                         .textSelection(.enabled)
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.secondarySystemBackground))
+                        .background(Color.white)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
 
                     Button {
                         UIPasteboard.general.string = shareURL.absoluteString
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showingCopiedToast = true
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showingCopiedToast = false
+                            }
+                        }
                     } label: {
                         Label("复制这个地址", systemImage: "doc.on.doc")
                             .frame(maxWidth: .infinity)
@@ -489,10 +498,27 @@ struct ShareAddressSheet: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ProgressView("正在启动局域网分享服务...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(20)
+            .background(Color(red: 254 / 255, green: 254 / 255, blue: 254 / 255))
+            .overlay(alignment: .top) {
+                if showingCopiedToast {
+                    Text("已复制")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color.black.opacity(0.82))
+                        .clipShape(Capsule())
+                        .padding(.top, 12)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
-            .padding(20)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("关闭") {
@@ -516,8 +542,14 @@ struct ContentView: View {
                     .textEditorBackgroundHiddenIfAvailable()
                     .padding(12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(.secondarySystemBackground))
+                    .background(Color.white)
                     .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18)
+                            .stroke(Color(red: 204 / 255, green: 1, blue: 153 / 255), lineWidth: 2)
+                    )
+                    .shadow(color: Color(red: 204 / 255, green: 1, blue: 153 / 255).opacity(0.9), radius: 12)
+                    .shadow(color: Color(red: 204 / 255, green: 1, blue: 153 / 255).opacity(0.45), radius: 24)
 
                 Button {
                     server.startSharing(text: text)
@@ -525,15 +557,17 @@ struct ContentView: View {
                 } label: {
                     Label("分享文本", systemImage: "network")
                         .font(.headline)
-                        .frame(maxWidth: .infinity)
+                        .frame(width: UIScreen.main.bounds.width / 3)
                         .padding(.vertical, 14)
                 }
                 .buttonStyle(.borderedProminent)
             }
             .padding(12)
+            .background(Color(red: 254 / 255, green: 254 / 255, blue: 254 / 255))
             .navigationBarHidden(true)
         }
         .onAppear {
+            UITextView.appearance().backgroundColor = .clear
             server.updateSharedText(text)
         }
         .onChange(of: text) { newValue in
