@@ -5,6 +5,7 @@ import Darwin
 import UIKit
 
 enum AppDefaults {
+    static let savedTextKey = "helloipa.savedText"
     static let initialText = """
     这是一段示例文本。
     点击“分享文本”后，局域网内的电脑打开地址即可看到它。
@@ -606,7 +607,7 @@ struct ShareAddressSheet: View {
 
 struct ContentView: View {
     @StateObject private var server = LocalTextShareServer()
-    @State private var text = AppDefaults.initialText
+    @State private var text = UserDefaults.standard.string(forKey: AppDefaults.savedTextKey) ?? AppDefaults.initialText
     @State private var showingShareSheet = false
 
     var body: some View {
@@ -631,7 +632,7 @@ struct ContentView: View {
                 } label: {
                     Label("分享文本", systemImage: "network")
                         .font(.headline)
-                        .frame(width: 148, height: 52)
+                        .frame(width: UIScreen.main.bounds.width * 0.5, height: 52)
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -644,6 +645,7 @@ struct ContentView: View {
             server.updateSharedText(text)
         }
         .onChange(of: text) { newValue in
+            UserDefaults.standard.set(newValue, forKey: AppDefaults.savedTextKey)
             server.updateSharedText(newValue)
         }
         .onReceive(server.$syncedText) { newValue in
