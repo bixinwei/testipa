@@ -442,7 +442,6 @@ final class LocalTextShareServer: ObservableObject {
 
 struct ShareAddressSheet: View {
     @ObservedObject var server: LocalTextShareServer
-    @Binding var text: String
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -481,27 +480,8 @@ struct ShareAddressSheet: View {
                     ProgressView("正在启动局域网分享服务...")
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 }
-
-                Divider()
-
-                Text("当前文本预览")
-                    .font(.headline)
-
-                ScrollView {
-                    Text(text.isEmpty ? "暂无文本" : text)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
-                        .background(Color(.systemBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16)
-                                .stroke(Color.black.opacity(0.06), lineWidth: 1)
-                        )
-                }
             }
             .padding(20)
-            .navigationTitle("局域网分享")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("关闭") {
@@ -520,58 +500,27 @@ struct ContentView: View {
 
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("文本内容")
-                            .font(.headline)
+            VStack(spacing: 12) {
+                TextEditor(text: $text)
+                    .scrollContentBackground(.hidden)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
 
-                        TextEditor(text: $text)
-                            .frame(minHeight: 220)
-                            .padding(12)
-                            .background(Color(.secondarySystemBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 18))
-                    }
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("App 内预览")
-                            .font(.headline)
-
-                        Text(text.isEmpty ? "请输入要分享的文本" : text)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(18)
-                            .background(
-                                LinearGradient(
-                                    colors: [Color(red: 0.99, green: 0.97, blue: 0.93), Color.white],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: 22))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 22)
-                                    .stroke(Color(red: 0.89, green: 0.84, blue: 0.77), lineWidth: 1)
-                            )
-                    }
-
-                    Button {
-                        server.startSharing(text: text)
-                        showingShareSheet = true
-                    } label: {
-                        Label("分享文本", systemImage: "network")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Text("分享后会弹出一个 `http://` 地址。局域网电脑在浏览器打开这个地址，就能看到当前文本。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                Button {
+                    server.startSharing(text: text)
+                    showingShareSheet = true
+                } label: {
+                    Label("分享文本", systemImage: "network")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
                 }
-                .padding(20)
+                .buttonStyle(.borderedProminent)
             }
-            .navigationTitle("局域网文本分享")
+            .padding(12)
+            .navigationBarHidden(true)
         }
         .onAppear {
             server.updateSharedText(text)
@@ -585,7 +534,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showingShareSheet) {
-            ShareAddressSheet(server: server, text: $text)
+            ShareAddressSheet(server: server)
         }
     }
 }
