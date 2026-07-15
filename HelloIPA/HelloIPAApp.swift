@@ -606,9 +606,16 @@ struct ShareAddressSheet: View {
 }
 
 struct ContentView: View {
-    @StateObject private var server = LocalTextShareServer()
-    @State private var text = UserDefaults.standard.string(forKey: AppDefaults.savedTextKey) ?? AppDefaults.initialText
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var server: LocalTextShareServer
+    @State private var text: String
     @State private var showingShareSheet = false
+
+    init() {
+        let savedText = UserDefaults.standard.string(forKey: AppDefaults.savedTextKey) ?? AppDefaults.initialText
+        _text = State(initialValue: savedText)
+        _server = StateObject(wrappedValue: LocalTextShareServer(initialText: savedText))
+    }
 
     var body: some View {
         NavigationView {
@@ -647,6 +654,11 @@ struct ContentView: View {
         .onChange(of: text) { newValue in
             UserDefaults.standard.set(newValue, forKey: AppDefaults.savedTextKey)
             server.updateSharedText(newValue)
+        }
+        .onChange(of: scenePhase) { newPhase in
+            if newPhase == .inactive || newPhase == .background {
+                UserDefaults.standard.set(text, forKey: AppDefaults.savedTextKey)
+            }
         }
         .onReceive(server.$syncedText) { newValue in
             if text != newValue {
