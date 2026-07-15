@@ -11,6 +11,17 @@ enum AppDefaults {
     """
 }
 
+extension View {
+    @ViewBuilder
+    func textEditorBackgroundHiddenIfAvailable() -> some View {
+        if #available(iOS 16.0, *) {
+            self.scrollContentBackground(.hidden)
+        } else {
+            self
+        }
+    }
+}
+
 final class LocalTextShareServer: ObservableObject {
     @Published private(set) var shareURL: URL?
     @Published private(set) var errorMessage: String?
@@ -502,7 +513,7 @@ struct ContentView: View {
         NavigationView {
             VStack(spacing: 12) {
                 TextEditor(text: $text)
-                    .scrollContentBackground(.hidden)
+                    .textEditorBackgroundHiddenIfAvailable()
                     .padding(12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(.secondarySystemBackground))
