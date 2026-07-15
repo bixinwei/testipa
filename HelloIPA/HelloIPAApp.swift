@@ -26,6 +26,7 @@ extension View {
 final class LocalTextShareServer: ObservableObject {
     @Published private(set) var shareURL: URL?
     @Published private(set) var errorMessage: String?
+    @Published private(set) var isSharingEnabled = false
     @Published private(set) var syncedText: String
 
     private let queue = DispatchQueue(label: "helloipa.local-text-server")
@@ -54,6 +55,10 @@ final class LocalTextShareServer: ObservableObject {
 
     func startSharing(text: String) {
         updateSharedText(text)
+        DispatchQueue.main.async {
+            self.errorMessage = nil
+            self.isSharingEnabled = true
+        }
 
         if listener != nil {
             return
@@ -61,6 +66,21 @@ final class LocalTextShareServer: ObservableObject {
 
         nextPortIndex = 0
         tryNextPort()
+    }
+
+    func stopSharing() {
+        queue.async {
+            self.listener?.cancel()
+            self.listener = nil
+            self.currentPort = nil
+            self.nextPortIndex = 0
+        }
+
+        DispatchQueue.main.async {
+            self.shareURL = nil
+            self.errorMessage = nil
+            self.isSharingEnabled = false
+        }
     }
 
     private func startListener(on port: UInt16) -> Bool {
@@ -105,6 +125,7 @@ final class LocalTextShareServer: ObservableObject {
                 DispatchQueue.main.async {
                     self.shareURL = nil
                     self.errorMessage = error.localizedDescription
+                    self.isSharingEnabled = false
                 }
             }
         default:
@@ -634,14 +655,20 @@ struct ContentView: View {
                     .shadow(color: Color(red: 204 / 255, green: 1, blue: 153 / 255).opacity(0.45), radius: 24)
 
                 Button {
-                    server.startSharing(text: text)
-                    showingShareSheet = true
+                    if server.isSharingEnabled {
+                        server.stopSharing()
+                        showingShareSheet = false
+                    } else {
+                        server.startSharing(text: text)
+                        showingShareSheet = true
+                    }
                 } label: {
-                    Label("分享文本", systemImage: "network")
+                    Label(server.isSharingEnabled ? "关闭分享" : "开启分享", systemImage: server.isSharingEnabled ? "network.slash" : "network")
                         .font(.headline)
                         .frame(width: UIScreen.main.bounds.width * 0.5, height: 52)
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(server.isSharingEnabled ? Color.red.opacity(0.88) : Color.accentColor)
             }
             .padding(12)
             .background(Color(red: 254 / 255, green: 254 / 255, blue: 254 / 255))
@@ -663,6 +690,11 @@ struct ContentView: View {
         .onReceive(server.$syncedText) { newValue in
             if text != newValue {
                 text = newValue
+            }
+        }
+        .onReceive(server.$isSharingEnabled) { isEnabled in
+            if !isEnabled, server.errorMessage == nil {
+                showingShareSheet = false
             }
         }
         .sheet(isPresented: $showingShareSheet) {
