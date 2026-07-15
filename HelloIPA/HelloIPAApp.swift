@@ -29,6 +29,7 @@ final class LocalTextShareServer: ObservableObject {
 
     private let queue = DispatchQueue(label: "helloipa.local-text-server")
     private let preferredPorts: [UInt16] = [8080, 8081, 8082, 8090]
+    private let maxRequestSize = 1_048_576
     private var listener: NWListener?
     private var currentText: String
     private var currentPort: UInt16?
@@ -165,7 +166,11 @@ final class LocalTextShareServer: ObservableObject {
     }
 
     private func receiveRequest(on connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, _, error in
+        receiveRequestData(on: connection, accumulatedData: Data())
+    }
+
+    private func receiveRequestData(on connection: NWConnection, accumulatedData: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, isComplete, error in
             guard let self else {
                 connection.cancel()
                 return
@@ -176,39 +181,63 @@ final class LocalTextShareServer: ObservableObject {
                 return
             }
 
-            let request = String(data: data ?? Data(), encoding: .utf8) ?? ""
-            let requestLine = request.components(separatedBy: "\r\n").first ?? ""
-            let path = Self.extractRequestPath(from: requestLine)
-            let response: String
+            var buffer = accumulatedData
+            if let data, !data.isEmpty {
+                buffer.append(data)
+            }
 
-            if requestLine.hasPrefix("GET "), path == "/" {
-                let body = self.makeHTMLPage(with: self.currentText)
-                response = self.httpResponse(
-                    statusLine: "HTTP/1.1 200 OK\r\n",
-                    contentType: "text/html; charset=utf-8",
-                    body: body
-                )
-            } else if requestLine.hasPrefix("POST "), path == "/sync" {
-                let bodyText = Self.extractHTTPBody(from: request)
-                self.updateSharedText(bodyText)
-                let body = "{\"ok\":true}"
-                response = self.httpResponse(
-                    statusLine: "HTTP/1.1 200 OK\r\n",
+            if buffer.count > self.maxRequestSize {
+                let body = "{\"ok\":false,\"error\":\"Request too large\"}"
+                let response = self.httpResponse(
+                    statusLine: "HTTP/1.1 413 Payload Too Large\r\n",
                     contentType: "application/json; charset=utf-8",
                     body: body
                 )
-            } else {
-                let body = "<html><body><h1>404</h1></body></html>"
-                response = self.httpResponse(
-                    statusLine: "HTTP/1.1 404 Not Found\r\n",
-                    contentType: "text/html; charset=utf-8",
-                    body: body
-                )
+                connection.send(content: response.data(using: .utf8), completion: .contentProcessed { _ in
+                    connection.cancel()
+                })
+                return
             }
 
-            connection.send(content: response.data(using: .utf8), completion: .contentProcessed { _ in
+            if let request = Self.parseCompleteRequest(from: buffer) {
+                let response: String
+
+                if request.requestLine.hasPrefix("GET "), request.path == "/" {
+                    let body = self.makeHTMLPage(with: self.currentText)
+                    response = self.httpResponse(
+                        statusLine: "HTTP/1.1 200 OK\r\n",
+                        contentType: "text/html; charset=utf-8",
+                        body: body
+                    )
+                } else if request.requestLine.hasPrefix("POST "), request.path == "/sync" {
+                    self.updateSharedText(request.body)
+                    let body = "{\"ok\":true}"
+                    response = self.httpResponse(
+                        statusLine: "HTTP/1.1 200 OK\r\n",
+                        contentType: "application/json; charset=utf-8",
+                        body: body
+                    )
+                } else {
+                    let body = "<html><body><h1>404</h1></body></html>"
+                    response = self.httpResponse(
+                        statusLine: "HTTP/1.1 404 Not Found\r\n",
+                        contentType: "text/html; charset=utf-8",
+                        body: body
+                    )
+                }
+
+                connection.send(content: response.data(using: .utf8), completion: .contentProcessed { _ in
+                    connection.cancel()
+                })
+                return
+            }
+
+            if isComplete {
                 connection.cancel()
-            })
+                return
+            }
+
+            self.receiveRequestData(on: connection, accumulatedData: buffer)
         }
     }
 
@@ -370,12 +399,37 @@ final class LocalTextShareServer: ObservableObject {
             .replacingOccurrences(of: "'", with: "&#39;")
     }
 
-    private static func extractHTTPBody(from request: String) -> String {
-        let separator = "\r\n\r\n"
-        guard let range = request.range(of: separator) else {
-            return ""
+    private static func parseCompleteRequest(from data: Data) -> (requestLine: String, path: String, body: String)? {
+        let separator = Data("\r\n\r\n".utf8)
+        guard let headerRange = data.range(of: separator) else {
+            return nil
         }
-        return String(request[range.upperBound...])
+
+        let headerData = data.subdata(in: 0..<headerRange.lowerBound)
+        let bodyStartIndex = headerRange.upperBound
+        let headerText = String(data: headerData, encoding: .utf8) ?? ""
+        let requestLine = headerText.components(separatedBy: "\r\n").first ?? ""
+        let contentLength = extractContentLength(from: headerText) ?? 0
+
+        guard data.count >= bodyStartIndex + contentLength else {
+            return nil
+        }
+
+        let bodyData = data.subdata(in: bodyStartIndex..<(bodyStartIndex + contentLength))
+        let path = extractRequestPath(from: requestLine)
+        let body = String(data: bodyData, encoding: .utf8) ?? ""
+        return (requestLine: requestLine, path: path, body: body)
+    }
+
+    private static func extractContentLength(from headers: String) -> Int? {
+        for line in headers.components(separatedBy: "\r\n") {
+            let parts = line.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            if parts[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "content-length" {
+                return Int(parts[1].trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+        return nil
     }
 
     private static func extractRequestPath(from requestLine: String) -> String {
