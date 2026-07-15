@@ -12,13 +12,49 @@ enum AppDefaults {
     """
 }
 
-extension View {
-    @ViewBuilder
-    func textEditorBackgroundHiddenIfAvailable() -> some View {
-        if #available(iOS 16.0, *) {
-            self.scrollContentBackground(.hidden)
-        } else {
-            self
+struct StableTextEditor: UIViewRepresentable {
+    @Binding var text: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.delegate = context.coordinator
+        textView.backgroundColor = .clear
+        textView.textColor = .label
+        textView.font = .systemFont(ofSize: 18)
+        textView.keyboardDismissMode = .interactive
+        textView.alwaysBounceVertical = true
+        textView.contentInset = .zero
+        textView.scrollIndicatorInsets = .zero
+        textView.textContainerInset = UIEdgeInsets(top: 14, left: 10, bottom: 14, right: 10)
+        textView.textContainer.lineFragmentPadding = 0
+        textView.autocorrectionType = .no
+        textView.autocapitalizationType = .none
+        textView.text = text
+        return textView
+    }
+
+    func updateUIView(_ textView: UITextView, context: Context) {
+        guard textView.text != text else { return }
+
+        let selectedRange = textView.selectedRange
+        textView.text = text
+        let clampedLocation = min(selectedRange.location, textView.text.count)
+        textView.selectedRange = NSRange(location: clampedLocation, length: 0)
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        @Binding private var text: String
+
+        init(text: Binding<String>) {
+            _text = text
+        }
+
+        func textViewDidChange(_ textView: UITextView) {
+            text = textView.text
         }
     }
 }
@@ -641,9 +677,7 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 12) {
-                TextEditor(text: $text)
-                    .textEditorBackgroundHiddenIfAvailable()
-                    .padding(12)
+                StableTextEditor(text: $text)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.white)
                     .clipShape(RoundedRectangle(cornerRadius: 18))
@@ -675,7 +709,6 @@ struct ContentView: View {
             .navigationBarHidden(true)
         }
         .onAppear {
-            UITextView.appearance().backgroundColor = .clear
             server.updateSharedText(text)
         }
         .onChange(of: text) { newValue in
