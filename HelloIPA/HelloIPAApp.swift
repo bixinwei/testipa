@@ -3,6 +3,7 @@ import Network
 import Foundation
 import Darwin
 import UIKit
+import Combine
 
 enum AppDefaults {
     static let savedTextKey = "helloipa.savedText"
@@ -10,6 +11,31 @@ enum AppDefaults {
     这是一段示例文本。
     点击“分享文本”后，局域网内的电脑打开地址即可看到它。
     """
+}
+
+struct FilledCapsuleButtonStyle: ButtonStyle {
+    let backgroundColor: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundColor(.white)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(backgroundColor.opacity(configuration.isPressed ? 0.8 : 1))
+            )
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+    }
+}
+
+struct ActivityIndicator: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIActivityIndicatorView {
+        let indicator = UIActivityIndicatorView(style: .medium)
+        indicator.startAnimating()
+        return indicator
+    }
+
+    func updateUIView(_ uiView: UIActivityIndicatorView, context: Context) {
+    }
 }
 
 struct StableTextEditor: UIViewRepresentable {
@@ -42,7 +68,7 @@ struct StableTextEditor: UIViewRepresentable {
 
         let selectedRange = textView.selectedRange
         textView.text = text
-        let clampedLocation = min(selectedRange.location, textView.text.count)
+        let clampedLocation = min(selectedRange.location, (textView.text as NSString).length)
         textView.selectedRange = NSRange(location: clampedLocation, length: 0)
     }
 
@@ -174,6 +200,7 @@ final class LocalTextShareServer: ObservableObject {
             DispatchQueue.main.async {
                 self.errorMessage = "无法启动 HTTP 分享服务，请稍后重试。"
                 self.shareURL = nil
+                self.isSharingEnabled = false
             }
             return
         }
@@ -229,7 +256,7 @@ final class LocalTextShareServer: ObservableObject {
 
     private func receiveRequestData(on connection: NWConnection, accumulatedData: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, isComplete, error in
-            guard let self else {
+            guard let self = self else {
                 connection.cancel()
                 return
             }
@@ -240,7 +267,7 @@ final class LocalTextShareServer: ObservableObject {
             }
 
             var buffer = accumulatedData
-            if let data, !data.isEmpty {
+            if let data = data, !data.isEmpty {
                 buffer.append(data)
             }
 
@@ -384,11 +411,6 @@ final class LocalTextShareServer: ObservableObject {
               color: #fff;
               cursor: pointer;
               box-shadow: 0 12px 24px rgba(31, 111, 235, 0.22);
-            }
-            .tip {
-              margin-top: 14px;
-              color: var(--muted);
-              font-size: 14px;
             }
             .status {
               min-height: 22px;
@@ -582,63 +604,112 @@ final class LocalTextShareServer: ObservableObject {
     }
 }
 
+final class AppViewModel: ObservableObject {
+    @Published var text: String {
+        didSet {
+            UserDefaults.standard.set(text, forKey: AppDefaults.savedTextKey)
+            server.updateSharedText(text)
+        }
+    }
+    @Published var showingShareSheet = false
+
+    let server: LocalTextShareServer
+    private var cancellables: Set<AnyCancellable> = []
+
+    init() {
+        let savedText = UserDefaults.standard.string(forKey: AppDefaults.savedTextKey) ?? AppDefaults.initialText
+        self.text = savedText
+        self.server = LocalTextShareServer(initialText: savedText)
+
+        server.$syncedText
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newValue in
+                guard let self = self, self.text != newValue else { return }
+                self.text = newValue
+            }
+            .store(in: &cancellables)
+
+        server.$isSharingEnabled
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isEnabled in
+                guard let self = self else { return }
+                if !isEnabled && self.server.errorMessage == nil {
+                    self.showingShareSheet = false
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    func startSharing() {
+        server.startSharing(text: text)
+        showingShareSheet = true
+    }
+
+    func stopSharing() {
+        server.stopSharing()
+        showingShareSheet = false
+    }
+
+    func persistText() {
+        UserDefaults.standard.set(text, forKey: AppDefaults.savedTextKey)
+    }
+}
+
 struct ShareAddressSheet: View {
     @ObservedObject var server: LocalTextShareServer
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.presentationMode) private var presentationMode
     @State private var showingCopiedToast = false
 
     var body: some View {
         NavigationView {
-            VStack(alignment: .leading, spacing: 18) {
-                if let shareURL = server.shareURL {
-                    Text("请让电脑和手机连接同一个 Wi-Fi，然后在浏览器打开下面这个地址：")
-                        .font(.body)
+            ZStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 18) {
+                    if let shareURL = server.shareURL {
+                        Text("请让电脑和手机连接同一个 Wi-Fi，然后在浏览器打开下面这个地址：")
+                            .font(.body)
 
-                    Text(shareURL.absoluteString)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        Text(shareURL.absoluteString)
+                            .font(.system(.body, design: .monospaced))
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
 
-                    Button {
-                        UIPasteboard.general.string = shareURL.absoluteString
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showingCopiedToast = true
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showingCopiedToast = false
+                        Button(action: copyAddress) {
+                            HStack {
+                                Image(systemName: "doc.on.doc")
+                                Text("复制这个地址")
                             }
-                        }
-                    } label: {
-                        Label("复制这个地址", systemImage: "doc.on.doc")
+                            .font(.headline)
                             .frame(maxWidth: .infinity)
                             .frame(height: 52)
-                    }
-                    .buttonStyle(.borderedProminent)
+                        }
+                        .buttonStyle(FilledCapsuleButtonStyle(backgroundColor: Color.blue))
 
-                    Text("电脑打开后会看到当前这段文本内容。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                } else if let errorMessage = server.errorMessage {
-                    Text("分享启动失败")
-                        .font(.headline)
+                        Text("电脑打开后会看到当前这段文本内容。")
+                            .font(.footnote)
+                            .foregroundColor(Color(UIColor.secondaryLabel))
+                    } else if let errorMessage = server.errorMessage {
+                        Text("分享启动失败")
+                            .font(.headline)
 
-                    Text(errorMessage)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ProgressView("正在启动局域网分享服务...")
+                        Text(errorMessage)
+                            .foregroundColor(Color(UIColor.secondaryLabel))
+                    } else {
+                        HStack(spacing: 10) {
+                            ActivityIndicator()
+                            Text("正在启动局域网分享服务...")
+                                .foregroundColor(Color(UIColor.secondaryLabel))
+                        }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                    }
 
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(20)
-            .background(Color(red: 254 / 255, green: 254 / 255, blue: 254 / 255))
-            .overlay(alignment: .top) {
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(20)
+                .background(Color(red: 254 / 255, green: 254 / 255, blue: 254 / 255))
+
                 if showingCopiedToast {
                     Text("已复制")
                         .font(.subheadline.weight(.semibold))
@@ -648,99 +719,120 @@ struct ShareAddressSheet: View {
                         .background(Color.black.opacity(0.82))
                         .clipShape(Capsule())
                         .padding(.top, 12)
-                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("关闭") {
-                        dismiss()
-                    }
-                }
+            .navigationBarTitle("", displayMode: .inline)
+            .navigationBarItems(trailing: Button("关闭") {
+                presentationMode.wrappedValue.dismiss()
+            })
+        }
+    }
+
+    private func copyAddress() {
+        guard let shareURL = server.shareURL else { return }
+        UIPasteboard.general.string = shareURL.absoluteString
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showingCopiedToast = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showingCopiedToast = false
             }
         }
     }
 }
 
 struct ContentView: View {
-    @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var server: LocalTextShareServer
-    @State private var text: String
-    @State private var showingShareSheet = false
-
-    init() {
-        let savedText = UserDefaults.standard.string(forKey: AppDefaults.savedTextKey) ?? AppDefaults.initialText
-        _text = State(initialValue: savedText)
-        _server = StateObject(wrappedValue: LocalTextShareServer(initialText: savedText))
-    }
+    @ObservedObject var viewModel: AppViewModel
 
     var body: some View {
         NavigationView {
             VStack(spacing: 12) {
-                StableTextEditor(text: $text)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18)
-                            .stroke(Color(red: 204 / 255, green: 1, blue: 153 / 255), lineWidth: 2)
-                    )
-                    .shadow(color: Color(red: 204 / 255, green: 1, blue: 153 / 255).opacity(0.9), radius: 12)
-                    .shadow(color: Color(red: 204 / 255, green: 1, blue: 153 / 255).opacity(0.45), radius: 24)
+                StableTextEditor(text: Binding(
+                    get: { viewModel.text },
+                    set: { viewModel.text = $0 }
+                ))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18)
+                        .stroke(Color(red: 204 / 255, green: 1, blue: 153 / 255), lineWidth: 2)
+                )
+                .shadow(color: Color(red: 204 / 255, green: 1, blue: 153 / 255).opacity(0.9), radius: 12)
+                .shadow(color: Color(red: 204 / 255, green: 1, blue: 153 / 255).opacity(0.45), radius: 24)
 
-                Button {
-                    if server.isSharingEnabled {
-                        server.stopSharing()
-                        showingShareSheet = false
-                    } else {
-                        server.startSharing(text: text)
-                        showingShareSheet = true
+                Button(action: toggleShare) {
+                    HStack {
+                        Image(systemName: viewModel.server.isSharingEnabled ? "network.slash" : "network")
+                        Text(viewModel.server.isSharingEnabled ? "关闭分享" : "开启分享")
                     }
-                } label: {
-                    Label(server.isSharingEnabled ? "关闭分享" : "开启分享", systemImage: server.isSharingEnabled ? "network.slash" : "network")
-                        .font(.headline)
-                        .frame(width: UIScreen.main.bounds.width * 0.5, height: 52)
+                    .font(.headline)
+                    .frame(width: UIScreen.main.bounds.width * 0.5, height: 52)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(server.isSharingEnabled ? Color.red.opacity(0.88) : Color.accentColor)
+                .buttonStyle(FilledCapsuleButtonStyle(backgroundColor: viewModel.server.isSharingEnabled ? Color.red.opacity(0.88) : Color.blue))
             }
             .padding(12)
             .background(Color(red: 254 / 255, green: 254 / 255, blue: 254 / 255))
             .navigationBarHidden(true)
         }
         .onAppear {
-            server.updateSharedText(text)
+            viewModel.server.updateSharedText(viewModel.text)
         }
-        .onChange(of: text) { newValue in
-            UserDefaults.standard.set(newValue, forKey: AppDefaults.savedTextKey)
-            server.updateSharedText(newValue)
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            viewModel.persistText()
         }
-        .onChange(of: scenePhase) { newPhase in
-            if newPhase == .inactive || newPhase == .background {
-                UserDefaults.standard.set(text, forKey: AppDefaults.savedTextKey)
-            }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            viewModel.persistText()
         }
-        .onReceive(server.$syncedText) { newValue in
-            if text != newValue {
-                text = newValue
-            }
+        .sheet(isPresented: Binding(
+            get: { viewModel.showingShareSheet },
+            set: { viewModel.showingShareSheet = $0 }
+        )) {
+            ShareAddressSheet(server: viewModel.server)
         }
-        .onReceive(server.$isSharingEnabled) { isEnabled in
-            if !isEnabled, server.errorMessage == nil {
-                showingShareSheet = false
-            }
-        }
-        .sheet(isPresented: $showingShareSheet) {
-            ShareAddressSheet(server: server)
+    }
+
+    private func toggleShare() {
+        if viewModel.server.isSharingEnabled {
+            viewModel.stopSharing()
+        } else {
+            viewModel.startSharing()
         }
     }
 }
 
-@main
-struct HelloIPAApp: App {
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
+final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+    var window: UIWindow?
+    private let viewModel = AppViewModel()
+
+    func scene(_ scene: UIScene,
+               willConnectTo session: UISceneSession,
+               options connectionOptions: UIScene.ConnectionOptions) {
+        guard let windowScene = scene as? UIWindowScene else { return }
+
+        let window = UIWindow(windowScene: windowScene)
+        window.rootViewController = UIHostingController(rootView: ContentView(viewModel: viewModel))
+        self.window = window
+        window.makeKeyAndVisible()
+    }
+
+    func sceneWillResignActive(_ scene: UIScene) {
+        viewModel.persistText()
+    }
+
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        viewModel.persistText()
+    }
+}
+
+@UIApplicationMain
+final class AppDelegate: UIResponder, UIApplicationDelegate {
+    func application(_ application: UIApplication,
+                     configurationForConnecting connectingSceneSession: UISceneSession,
+                     options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
+        configuration.delegateClass = SceneDelegate.self
+        return configuration
     }
 }

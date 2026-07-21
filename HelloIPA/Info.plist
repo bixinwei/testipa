@@ -24,6 +24,18 @@
 	<string>需要使用本地网络来生成局域网分享地址，让同一 Wi-Fi 下的设备访问文本内容。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 	</dict>
