@@ -12,11 +12,13 @@ jobs:
       - name: Extract compiled asset catalog
         run: |
           unzip -p OldOS.ipa Payload/OldOS.app/Assets.car > /tmp/Assets.car
-          brew tap 0xxd0/tap
-          brew trust --formula 0xxd0/tap/cartool
-          brew install cartool
+          curl -L --fail https://github.com/showxu/cartools/releases/download/1.0.0-alpha/cartool-1.0.0-alpha.bigsur.bottle.tar.gz -o /tmp/cartool.tar.gz
+          mkdir -p /tmp/cartool
+          tar -xzf /tmp/cartool.tar.gz -C /tmp/cartool
+          CARTOOL="$(find /tmp/cartool -type f -name cartool | head -n 1)"
+          chmod +x "$CARTOOL"
           mkdir -p oldos-assets
-          cartool /tmp/Assets.car oldos-assets
+          "$CARTOOL" /tmp/Assets.car oldos-assets
           find oldos-assets -type f \( -iname '*notes*' -o -iname '*buttonbar*' -o -iname '*navigationbar*' \) -print
 
       - name: Upload extracted Notes resources
