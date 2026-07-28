@@ -13,17 +13,136 @@ enum AppDefaults {
     """
 }
 
-struct FilledCapsuleButtonStyle: ButtonStyle {
-    let backgroundColor: Color
+private extension Color {
+    static let retroLeatherDark = Color(red: 0.32, green: 0.20, blue: 0.12)
+    static let retroLeatherLight = Color(red: 0.56, green: 0.38, blue: 0.23)
+    static let retroPaper = Color(red: 0.98, green: 0.94, blue: 0.78)
+    static let retroPaperLine = Color(red: 0.62, green: 0.76, blue: 0.90)
+    static let retroPaperMargin = Color(red: 0.82, green: 0.38, blue: 0.38)
+    static let retroWoodDark = Color(red: 0.16, green: 0.10, blue: 0.06)
+    static let retroWoodLight = Color(red: 0.24, green: 0.15, blue: 0.09)
+    static let retroLCDBackground = Color(red: 0.05, green: 0.09, blue: 0.06)
+    static let retroLCDText = Color(red: 0.55, green: 0.95, blue: 0.55)
+}
+
+/// Glossy capsule button in the style of pre-iOS7 default UIButtons: top highlight sheen + bevel border.
+struct GlossyCapsuleButtonStyle: ButtonStyle {
+    let baseColor: Color
+    var fontSize: CGFloat = 17
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .font(.system(size: fontSize, weight: .semibold))
             .foregroundColor(.white)
             .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(backgroundColor.opacity(configuration.isPressed ? 0.8 : 1))
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [baseColor.opacity(0.95), baseColor.opacity(0.68)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.55), Color.white.opacity(0)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.black.opacity(0.4), lineWidth: 1)
+                }
+                .opacity(configuration.isPressed ? 0.72 : 1)
             )
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .shadow(
+                color: Color.black.opacity(0.35),
+                radius: configuration.isPressed ? 1 : 4,
+                x: 0,
+                y: configuration.isPressed ? 1 : 3
+            )
+    }
+}
+
+/// Leather-textured top bar echoing the iOS 6 Notes/Contacts chrome.
+struct RetroTitleBar<Trailing: View>: View {
+    let title: String
+    let trailing: () -> Trailing
+
+    init(title: String, @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }) {
+        self.title = title
+        self.trailing = trailing
+    }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color.retroLeatherLight, Color.retroLeatherDark],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            // A subtle cross-hatch keeps the bar from looking like a flat gradient.
+            GeometryReader { geometry in
+                Path { path in
+                    var x: CGFloat = -geometry.size.height
+                    while x < geometry.size.width {
+                        path.move(to: CGPoint(x: x, y: 0))
+                        path.addLine(to: CGPoint(x: x + geometry.size.height, y: geometry.size.height))
+                        x += 7
+                    }
+                }
+                .stroke(Color.white.opacity(0.055), lineWidth: 1)
+            }
+
+            VStack(spacing: 0) {
+                Rectangle().fill(Color.white.opacity(0.35)).frame(height: 1)
+                Spacer()
+                Rectangle().fill(Color.black.opacity(0.45)).frame(height: 1)
+            }
+
+            Text(title)
+                .font(.system(size: 20, weight: .bold))
+                .foregroundColor(Color.white.opacity(0.95))
+                .shadow(color: Color.black.opacity(0.6), radius: 0, x: 0, y: 1)
+
+            HStack {
+                Spacer()
+                trailing()
+                    .padding(.trailing, 14)
+            }
+        }
+        .frame(height: 52)
+    }
+}
+
+/// Yellow ruled legal-pad background, à la the original iOS Notes app.
+struct RuledPaperBackground: View {
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .topLeading) {
+                Color.retroPaper
+
+                Path { path in
+                    var y: CGFloat = 30
+                    while y < geometry.size.height {
+                        path.move(to: CGPoint(x: 0, y: y))
+                        path.addLine(to: CGPoint(x: geometry.size.width, y: y))
+                        y += 26
+                    }
+                }
+                .stroke(Color.retroPaperLine, lineWidth: 1)
+
+                Path { path in
+                    path.move(to: CGPoint(x: 30, y: 0))
+                    path.addLine(to: CGPoint(x: 30, y: geometry.size.height))
+                }
+                .stroke(Color.retroPaperMargin.opacity(0.7), lineWidth: 1.4)
+            }
+        }
     }
 }
 
@@ -49,8 +168,8 @@ struct StableTextEditor: UIViewRepresentable {
         let textView = UITextView()
         textView.delegate = context.coordinator
         textView.backgroundColor = .clear
-        textView.textColor = .label
-        textView.font = .systemFont(ofSize: 18)
+        textView.textColor = UIColor(red: 0.16, green: 0.10, blue: 0.06, alpha: 1)
+        textView.font = UIFont(name: "MarkerFelt-Thin", size: 19) ?? .systemFont(ofSize: 18)
         textView.keyboardDismissMode = .interactive
         textView.alwaysBounceVertical = true
         textView.contentInset = .zero
@@ -684,7 +803,7 @@ struct ShareAddressSheet: View {
                             .frame(maxWidth: .infinity)
                             .frame(height: 52)
                         }
-                        .buttonStyle(FilledCapsuleButtonStyle(backgroundColor: Color.blue))
+                        .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.12, green: 0.34, blue: 0.67)))
 
                         Text("电脑打开后会看到当前这段文本内容。")
                             .font(.footnote)
@@ -708,7 +827,7 @@ struct ShareAddressSheet: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(20)
-                .background(Color(red: 254 / 255, green: 254 / 255, blue: 254 / 255))
+                .background(Color.retroPaper)
 
                 if showingCopiedToast {
                     Text("已复制")
@@ -747,33 +866,54 @@ struct ContentView: View {
 
     var body: some View {
         NavigationView {
-            VStack(spacing: 12) {
-                StableTextEditor(text: Binding(
-                    get: { viewModel.text },
-                    set: { viewModel.text = $0 }
-                ))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18)
-                        .stroke(Color(red: 204 / 255, green: 1, blue: 153 / 255), lineWidth: 2)
-                )
-                .shadow(color: Color(red: 204 / 255, green: 1, blue: 153 / 255).opacity(0.9), radius: 12)
-                .shadow(color: Color(red: 204 / 255, green: 1, blue: 153 / 255).opacity(0.45), radius: 24)
+            VStack(spacing: 0) {
+                RetroTitleBar(title: "局域网便笺")
 
-                Button(action: toggleShare) {
-                    HStack {
-                        Image(systemName: viewModel.server.isSharingEnabled ? "network.slash" : "network")
-                        Text(viewModel.server.isSharingEnabled ? "关闭分享" : "开启分享")
+                ZStack {
+                    Color.retroWoodDark
+
+                    LinearGradient(
+                        colors: [Color.retroWoodLight, Color.retroWoodDark],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .opacity(0.7)
+
+                    VStack(spacing: 14) {
+                        ZStack {
+                            RuledPaperBackground()
+
+                            StableTextEditor(text: Binding(
+                                get: { viewModel.text },
+                                set: { viewModel.text = $0 }
+                            ))
+                            .padding(.leading, 29)
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(Color.black.opacity(0.62), lineWidth: 2)
+                        )
+                        .shadow(color: .black.opacity(0.65), radius: 2, x: 0, y: 2)
+
+                        Button(action: toggleShare) {
+                            HStack(spacing: 8) {
+                                Image(systemName: viewModel.server.isSharingEnabled ? "xmark.circle.fill" : "wifi")
+                                Text(viewModel.server.isSharingEnabled ? "关闭分享" : "开启分享")
+                            }
+                            .frame(width: 176, height: 44)
+                        }
+                        .buttonStyle(GlossyCapsuleButtonStyle(
+                            baseColor: viewModel.server.isSharingEnabled
+                                ? Color(red: 0.62, green: 0.17, blue: 0.12)
+                                : Color(red: 0.12, green: 0.34, blue: 0.67)
+                        ))
+                        .padding(.bottom, 16)
                     }
-                    .font(.headline)
-                    .frame(width: UIScreen.main.bounds.width * 0.5, height: 52)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 14)
                 }
-                .buttonStyle(FilledCapsuleButtonStyle(backgroundColor: viewModel.server.isSharingEnabled ? Color.red.opacity(0.88) : Color.blue))
             }
-            .padding(12)
-            .background(Color(red: 254 / 255, green: 254 / 255, blue: 254 / 255))
             .navigationBarHidden(true)
         }
         .onAppear {
