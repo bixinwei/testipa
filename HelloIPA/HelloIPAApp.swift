@@ -85,11 +85,10 @@ struct RetroTitleBar<Trailing: View>: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color.retroLeatherLight, Color.retroLeatherDark],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            Image("oldos-notes-topbar")
+                .resizable()
+                .scaledToFill()
+                .clipped()
 
             // A subtle cross-hatch keeps the bar from looking like a flat gradient.
             GeometryReader { geometry in
@@ -138,7 +137,10 @@ struct RuledPaperBackground: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
-                Color.retroPaper
+                Image("oldos-notes-body")
+                    .resizable()
+                    .scaledToFill()
+                    .clipped()
 
                 Path { path in
                     var y: CGFloat = 30
@@ -1040,7 +1042,7 @@ struct NotesListView: View {
     var body: some View {
         VStack(spacing: 0) {
             RetroTitleBar(title: "Notes (\(viewModel.notes.count))") {
-                Button(action: viewModel.createNote) { Image(systemName: "plus").frame(width: 42, height: 30) }
+                Button(action: viewModel.createNote) { Image("oldos-toolbar-plus").resizable().scaledToFit().frame(width: 25, height: 27) }
                     .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color.retroLeatherDark, fontSize: 24))
             }
             ZStack {
@@ -1093,7 +1095,7 @@ struct ContentView: View {
     private var editor: some View {
         VStack(spacing: 0) {
             RetroTitleBar(title: viewModel.currentNote.title) {
-                Button(action: viewModel.createNote) { Image(systemName: "plus").frame(width: 42, height: 30) }
+                Button(action: viewModel.createNote) { Image("oldos-toolbar-plus").resizable().scaledToFit().frame(width: 25, height: 27) }
                     .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color.retroLeatherDark, fontSize: 20))
             }
             .overlay(
@@ -1128,7 +1130,16 @@ struct ContentView: View {
     }
 
     private func toolButton(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: icon).font(.system(size: 23, weight: .regular)).frame(width: 52, height: 44) }
+        Button(action: action) {
+            if icon == "trash" {
+                Image("oldos-toolbar-trash").resizable().renderingMode(.template).scaledToFit().frame(width: 28, height: 34)
+            } else if icon == "wifi" || icon == "wifi.slash" {
+                Image(systemName: icon).font(.system(size: 23, weight: .regular))
+            } else {
+                Image(systemName: icon).font(.system(size: 23, weight: .regular))
+            }
+        }
+        .frame(width: 52, height: 44)
             .foregroundColor(Color.retroLeatherLight).buttonStyle(PlainButtonStyle()).disabled(!enabled).opacity(enabled ? 1 : 0.35)
     }
 
