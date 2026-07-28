@@ -90,22 +90,28 @@ struct OldOSHeaderControl: View {
 
     var body: some View {
         ZStack {
-            if let buttonCenter = oldOSImage(named: "oldos-notes-button-center") {
-                buttonCenter
-                    .resizable(
-                        capInsets: EdgeInsets(top: 10, leading: 5, bottom: 10, trailing: 5),
-                        resizingMode: .stretch
-                    )
-            }
-
             if includesBackCap {
                 HStack(spacing: 0) {
                     if let backCap = oldOSImage(named: "oldos-notes-back") {
                         backCap
                             .frame(width: 19, height: 30)
                     }
-                    Spacer(minLength: 0)
+                    if let buttonCenter = oldOSImage(named: "oldos-notes-button-center") {
+                        buttonCenter
+                            .resizable(
+                                capInsets: EdgeInsets(top: 10, leading: 5, bottom: 10, trailing: 5),
+                                resizingMode: .stretch
+                            )
+                            .frame(maxWidth: .infinity)
+                    }
                 }
+                .frame(maxWidth: .infinity)
+            } else if let buttonCenter = oldOSImage(named: "oldos-notes-button-center") {
+                buttonCenter
+                    .resizable(
+                        capInsets: EdgeInsets(top: 10, leading: 5, bottom: 10, trailing: 5),
+                        resizingMode: .stretch
+                    )
             }
 
             if let title = title {
@@ -214,6 +220,8 @@ struct RetroTitleBar<Trailing: View>: View {
 
 /// Yellow ruled legal-pad background, à la the original iOS Notes app.
 struct RuledPaperBackground: View {
+    var lineOffset: CGFloat = 0
+
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
@@ -229,7 +237,9 @@ struct RuledPaperBackground: View {
                 }
 
                 Path { path in
-                    var y: CGFloat = 30
+                    let phase = lineOffset.truncatingRemainder(dividingBy: 26)
+                    var y: CGFloat = 30 - phase
+                    while y > 0 { y -= 26 }
                     while y < geometry.size.height {
                         path.move(to: CGPoint(x: 0, y: y))
                         path.addLine(to: CGPoint(x: geometry.size.width, y: y))
@@ -261,6 +271,7 @@ struct ActivityIndicator: UIViewRepresentable {
 
 struct StableTextEditor: UIViewRepresentable {
     @Binding var text: String
+    @Binding var scrollOffset: CGFloat
 
     private static let noteFont = UIFont(name: "PingFangSC-Regular", size: 18) ?? .systemFont(ofSize: 18)
     private static let noteTextColor = UIColor(red: 0.16, green: 0.10, blue: 0.06, alpha: 1)
@@ -295,7 +306,7 @@ struct StableTextEditor: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(text: $text, scrollOffset: $scrollOffset)
     }
 
     func makeUIView(context: Context) -> UITextView {
@@ -341,9 +352,11 @@ struct StableTextEditor: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         @Binding private var text: String
+        @Binding private var scrollOffset: CGFloat
 
-        init(text: Binding<String>) {
+        init(text: Binding<String>, scrollOffset: Binding<CGFloat>) {
             _text = text
+            _scrollOffset = scrollOffset
         }
 
         func textViewDidChange(_ textView: UITextView) {
@@ -355,6 +368,10 @@ struct StableTextEditor: UIViewRepresentable {
             textView.attributedText = StableTextEditor.styledText(textView.text)
             textView.typingAttributes = StableTextEditor.noteAttributes()
             textView.selectedRange = selectedRange
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            scrollOffset = max(0, scrollView.contentOffset.y)
         }
 
         func textView(_ textView: UITextView,
@@ -1134,32 +1151,32 @@ struct ShareAddressSheet: View {
 struct NotesListView: View {
     @ObservedObject var viewModel: AppViewModel
     private let dateFormatter: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US"); f.dateFormat = "M/d/yy"; return f }()
+    private var screenWidth: CGFloat { UIScreen.main.bounds.width }
 
     var body: some View {
-        GeometryReader { screen in
-            VStack(spacing: 0) {
-                RetroTitleBar(title: "Notes (\(viewModel.notes.count))") {
-                    Button(action: viewModel.createNote) {
-                        OldOSHeaderControl(title: nil, iconName: "oldos-toolbar-plus")
-                            .frame(width: 44, height: 30)
-                    }
-                    .buttonStyle(PlainButtonStyle())
+        VStack(spacing: 0) {
+            RetroTitleBar(title: "Notes (\(viewModel.notes.count))") {
+                Button(action: viewModel.createNote) {
+                    OldOSHeaderControl(title: nil, iconName: "oldos-toolbar-plus")
+                        .frame(width: 44, height: 30)
                 }
-                .frame(width: screen.size.width)
+                .buttonStyle(PlainButtonStyle())
+            }
+            .frame(width: screenWidth)
 
-                ZStack {
-                    Color.retroPaper
-                    if let paper = oldOSImage(named: "oldos-notes-body") {
-                        paper
-                            .resizable()
-                            .scaledToFill()
-                            .clipped()
-                    }
-                    ScrollView {
-                        VStack(spacing: 1) {
-                            ForEach(viewModel.notes) { note in
-                                Button(action: { viewModel.select(note) }) {
-                                    HStack(spacing: 12) {
+            ZStack {
+                Color.retroPaper
+                if let paper = oldOSImage(named: "oldos-notes-body") {
+                    paper
+                        .resizable()
+                        .scaledToFill()
+                        .clipped()
+                }
+                ScrollView {
+                    VStack(spacing: 1) {
+                        ForEach(viewModel.notes) { note in
+                            Button(action: { viewModel.select(note) }) {
+                                HStack(spacing: 12) {
                                         Text(note.title)
                                             .font(.custom("MarkerFelt-Thin", size: 16))
                                             .lineLimit(1)
@@ -1175,25 +1192,24 @@ struct NotesListView: View {
                                             .font(.system(size: 22, weight: .bold))
                                             .foregroundColor(Color.retroLeatherDark.opacity(0.7))
                                             .layoutPriority(1)
-                                    }
-                                    .foregroundColor(Color.retroLeatherDark)
-                                    .padding(.vertical, 10)
-                                    .padding(.horizontal, 18)
-                                    .frame(width: screen.size.width, alignment: .leading)
-                                    .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
                                 }
-                                .buttonStyle(PlainButtonStyle())
+                                .foregroundColor(Color.retroLeatherDark)
+                                .padding(.vertical, 10)
+                                .padding(.horizontal, 18)
+                                .frame(width: screenWidth, alignment: .leading)
+                                .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
                             }
+                            .buttonStyle(PlainButtonStyle())
                         }
-                        .frame(width: screen.size.width, alignment: .leading)
                     }
+                    .frame(width: screenWidth, alignment: .leading)
                 }
-                .frame(width: screen.size.width)
-                .frame(maxHeight: .infinity)
             }
-            .frame(width: screen.size.width, height: screen.size.height)
-            .clipped()
+            .frame(width: screenWidth)
+            .frame(maxHeight: .infinity)
         }
+        .frame(width: screenWidth)
+        .clipped()
         .background(Color.black.edgesIgnoringSafeArea(.top))
         .edgesIgnoringSafeArea(.bottom)
     }
@@ -1202,6 +1218,7 @@ struct NotesListView: View {
 struct ContentView: View {
     @ObservedObject var viewModel: AppViewModel
     @State private var showingDeleteConfirmation = false
+    @State private var editorScrollOffset: CGFloat = 0
 
     var body: some View {
         ZStack {
@@ -1239,13 +1256,17 @@ struct ContentView: View {
                 alignment: .bottomLeading
             )
             ZStack(alignment: .bottom) {
-                RuledPaperBackground()
+                RuledPaperBackground(lineOffset: editorScrollOffset)
                 VStack {
                     HStack { Text("Today").font(.system(size: 18, weight: .bold)); Spacer(); Text(editorDate).font(.system(size: 18)) }
                         .foregroundColor(Color.retroLeatherLight).padding(.horizontal, 34).padding(.top, 14)
                     Spacer()
                 }
-                StableTextEditor(text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 }))
+                .offset(y: -editorScrollOffset)
+                StableTextEditor(
+                    text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 }),
+                    scrollOffset: $editorScrollOffset
+                )
                     .padding(.leading, 40)
                     .padding(.top, 70)
                     .padding(.bottom, 92)
@@ -1260,6 +1281,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.edgesIgnoringSafeArea(.top))
