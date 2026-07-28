@@ -334,7 +334,7 @@ struct StableTextEditor: UIViewRepresentable {
         textView.scrollIndicatorInsets = .zero
         // Shift each glyph run down by half the remaining leading so it sits
         // in the middle of its 26pt ruled-paper row rather than on a rule.
-        textView.textContainerInset = UIEdgeInsets(top: 13, left: 10, bottom: 14, right: 10)
+        textView.textContainerInset = UIEdgeInsets(top: 7, left: 10, bottom: 6, right: 10)
         textView.textContainer.lineFragmentPadding = 0
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
@@ -1275,8 +1275,9 @@ struct ContentView: View {
                     scrollOffset: $editorScrollOffset
                 )
                     .padding(.leading, 40)
-                    .padding(.top, 42)
-                    .padding(.bottom, 92)
+                    // Reserve only the single Today/date row above the text.
+                    .padding(.top, 30)
+                    .padding(.bottom, 60)
 
                 HStack {
                     Text("Today")
@@ -1284,11 +1285,11 @@ struct ContentView: View {
                     Text(editorDate)
                 }
                     .font(.custom("MarkerFelt-Thin", size: 16))
-                    .foregroundColor(Color.retroLeatherLight.opacity(0.72))
+                    .foregroundColor(Color.retroLeatherDark.opacity(0.82))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(.leading, 40)
                     .padding(.trailing, 34)
-                    .padding(.top, 10)
+                    .padding(.top, 4)
                     .allowsHitTesting(false)
                     .offset(y: -editorScrollOffset)
 
@@ -1299,7 +1300,7 @@ struct ContentView: View {
                     toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
                 }
                 .padding(.horizontal, 5)
-                .padding(.bottom, 26)
+                .padding(.bottom, 12)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
