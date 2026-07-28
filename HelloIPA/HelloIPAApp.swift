@@ -7,6 +7,7 @@ import Combine
 
 enum AppDefaults {
     static let savedTextKey = "helloipa.savedText"
+    static let notesKey = "helloipa.notes"
     static let initialText = """
     这是一段示例文本。
     点击“分享文本”后，局域网内的电脑打开地址即可看到它。
@@ -747,22 +748,49 @@ final class LocalTextShareServer: ObservableObject {
     }
 }
 
+struct Note: Identifiable, Codable, Equatable {
+    var id = UUID()
+    var text: String
+    var modifiedAt = Date()
+
+    var title: String {
+        let firstLine = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        return firstLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "新备忘录" : firstLine
+    }
+
+    var preview: String {
+        let compact = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return compact.isEmpty ? "无附加文本" : compact
+    }
+}
+
 final class AppViewModel: ObservableObject {
+    @Published private(set) var notes: [Note]
+    @Published private(set) var selectedNoteID: UUID
     @Published var text: String {
         didSet {
-            UserDefaults.standard.set(text, forKey: AppDefaults.savedTextKey)
+            updateSelectedNote()
             server.updateSharedText(text)
         }
     }
     @Published var showingShareSheet = false
+    @Published var showingList = true
 
     let server: LocalTextShareServer
     private var cancellables: Set<AnyCancellable> = []
 
     init() {
-        let savedText = UserDefaults.standard.string(forKey: AppDefaults.savedTextKey) ?? AppDefaults.initialText
-        self.text = savedText
-        self.server = LocalTextShareServer(initialText: savedText)
+        let restoredNotes: [Note]
+        if let data = UserDefaults.standard.data(forKey: AppDefaults.notesKey),
+           let decoded = try? JSONDecoder().decode([Note].self, from: data), !decoded.isEmpty {
+            restoredNotes = decoded
+        } else {
+            restoredNotes = [Note(text: UserDefaults.standard.string(forKey: AppDefaults.savedTextKey) ?? AppDefaults.initialText)]
+        }
+        self.notes = restoredNotes
+        self.selectedNoteID = restoredNotes[0].id
+        self.text = restoredNotes[0].text
+        self.server = LocalTextShareServer(initialText: restoredNotes[0].text)
 
         server.$syncedText
             .receive(on: DispatchQueue.main)
@@ -794,7 +822,55 @@ final class AppViewModel: ObservableObject {
     }
 
     func persistText() {
-        UserDefaults.standard.set(text, forKey: AppDefaults.savedTextKey)
+        updateSelectedNote()
+    }
+
+    func select(_ note: Note) {
+        selectedNoteID = note.id
+        text = note.text
+        showingList = false
+    }
+
+    func createNote() {
+        let note = Note(text: "")
+        notes.insert(note, at: 0)
+        selectedNoteID = note.id
+        text = ""
+        persistNotes()
+        showingList = false
+    }
+
+    func deleteSelectedNote() {
+        guard let index = notes.firstIndex(where: { $0.id == selectedNoteID }) else { return }
+        notes.remove(at: index)
+        if notes.isEmpty { notes = [Note(text: "")] }
+        let nextIndex = min(index, notes.count - 1)
+        selectedNoteID = notes[nextIndex].id
+        text = notes[nextIndex].text
+        persistNotes()
+    }
+
+    func moveSelection(by offset: Int) {
+        guard let index = notes.firstIndex(where: { $0.id == selectedNoteID }) else { return }
+        let next = index + offset
+        guard notes.indices.contains(next) else { return }
+        select(notes[next])
+    }
+
+    var canMovePrevious: Bool { (notes.firstIndex { $0.id == selectedNoteID } ?? 0) > 0 }
+    var canMoveNext: Bool { (notes.firstIndex { $0.id == selectedNoteID } ?? notes.count - 1) < notes.count - 1 }
+
+    private func updateSelectedNote() {
+        guard let index = notes.firstIndex(where: { $0.id == selectedNoteID }) else { return }
+        notes[index].text = text
+        notes[index].modifiedAt = Date()
+        persistNotes()
+    }
+
+    private func persistNotes() {
+        if let data = try? JSONEncoder().encode(notes) {
+            UserDefaults.standard.set(data, forKey: AppDefaults.notesKey)
+        }
     }
 }
 
@@ -916,87 +992,80 @@ struct ShareAddressSheet: View {
     }
 }
 
+struct NotesListView: View {
+    @ObservedObject var viewModel: AppViewModel
+    private let dateFormatter: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = "M月d日 HH:mm"; return f }()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            RetroTitleBar(title: "备忘录") {
+                Button(action: viewModel.createNote) { Image(systemName: "plus").frame(width: 42, height: 30) }
+                    .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.12, green: 0.34, blue: 0.67), fontSize: 18))
+            }
+            ZStack {
+                Color.retroWoodDark
+                ScrollView {
+                    LazyVStack(spacing: 1) {
+                        ForEach(viewModel.notes) { note in
+                            Button(action: { viewModel.select(note) }) {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    HStack { Text(note.title).font(.system(size: 19, weight: .bold)); Spacer(); Text(dateFormatter.string(from: note.modifiedAt)).font(.caption) }
+                                    Text(note.preview).font(.system(size: 14)).lineLimit(1)
+                                }
+                                .foregroundColor(Color.retroWoodDark).padding(.vertical, 14).padding(.horizontal, 18)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.retroPaper)
+                            }
+                        }
+                    }
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.black.opacity(0.65), lineWidth: 2))
+                    .padding(12)
+                }
+            }
+        }.edgesIgnoringSafeArea(.all)
+    }
+}
+
 struct ContentView: View {
     @ObservedObject var viewModel: AppViewModel
 
     var body: some View {
         ZStack {
-            NavigationView {
-                VStack(spacing: 0) {
-                    RetroTitleBar(title: "局域网便笺")
-
-                    ZStack {
-                        Color.retroWoodDark
-
-                        LinearGradient(
-                            colors: [Color.retroWoodLight, Color.retroWoodDark],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        .opacity(0.7)
-
-                        VStack(spacing: 14) {
-                        ZStack {
-                            RuledPaperBackground()
-
-                            StableTextEditor(text: Binding(
-                                get: { viewModel.text },
-                                set: { viewModel.text = $0 }
-                            ))
-                            .padding(.leading, 29)
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(Color.black.opacity(0.62), lineWidth: 2)
-                        )
-                        .shadow(color: .black.opacity(0.65), radius: 2, x: 0, y: 2)
-
-                        Button(action: toggleShare) {
-                            HStack(spacing: 8) {
-                                Image(systemName: viewModel.server.isSharingEnabled ? "xmark.circle.fill" : "wifi")
-                                Text(viewModel.server.isSharingEnabled ? "关闭分享" : "开启分享")
-                            }
-                            .frame(width: 176, height: 44)
-                        }
-                        .buttonStyle(GlossyCapsuleButtonStyle(
-                            baseColor: viewModel.server.isSharingEnabled
-                                ? Color(red: 0.62, green: 0.17, blue: 0.12)
-                                : Color(red: 0.12, green: 0.34, blue: 0.67)
-                        ))
-                        .padding(.bottom, 16)
-                    }
-                        .padding(.horizontal, 12)
-                        .padding(.top, 14)
-                    }
-                }
-                .navigationBarHidden(true)
-            }
-            .edgesIgnoringSafeArea(.all)
-
-            if viewModel.showingShareSheet {
-                ShareAddressSheet(server: viewModel.server) {
-                    viewModel.showingShareSheet = false
-                }
-            }
+            if viewModel.showingList { NotesListView(viewModel: viewModel) } else { editor }
+            if viewModel.showingShareSheet { ShareAddressSheet(server: viewModel.server) { viewModel.showingShareSheet = false } }
         }
-        .onAppear {
-            viewModel.server.updateSharedText(viewModel.text)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
-            viewModel.persistText()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-            viewModel.persistText()
-        }
+        .onAppear { viewModel.server.updateSharedText(viewModel.text) }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in viewModel.persistText() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in viewModel.persistText() }
     }
 
-    private func toggleShare() {
-        if viewModel.server.isSharingEnabled {
-            viewModel.stopSharing()
-        } else {
-            viewModel.startSharing()
-        }
+    private var editor: some View {
+        VStack(spacing: 0) {
+            RetroTitleBar(title: "备忘录") {
+                HStack(spacing: 8) {
+                    Button(action: { viewModel.showingList = true }) { Text("备忘录").frame(height: 30).padding(.horizontal, 7) }
+                        .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.12, green: 0.34, blue: 0.67), fontSize: 13))
+                    Button(action: viewModel.createNote) { Image(systemName: "plus").frame(width: 34, height: 30) }
+                        .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.12, green: 0.34, blue: 0.67), fontSize: 15))
+                }
+            }
+            ZStack {
+                Color.retroWoodDark
+                RuledPaperBackground().clipShape(RoundedRectangle(cornerRadius: 6)).overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.62), lineWidth: 2)).padding(12)
+                StableTextEditor(text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 })).padding(.leading, 41).padding(12)
+            }
+            HStack(spacing: 18) {
+                toolButton("chevron.left", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
+                toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
+                toolButton("trash", enabled: true) { viewModel.deleteSelectedNote() }
+                toolButton("chevron.right", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
+            }.frame(height: 62).frame(maxWidth: .infinity).background(Color.retroLeatherDark)
+        }.edgesIgnoringSafeArea(.all)
+    }
+
+    private func toolButton(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: icon).font(.system(size: 21, weight: .bold)).frame(width: 48, height: 38) }
+            .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.42, green: 0.28, blue: 0.18), fontSize: 16)).disabled(!enabled).opacity(enabled ? 1 : 0.35)
     }
 }
 
