@@ -83,6 +83,14 @@ struct RetroTitleBar<Trailing: View>: View {
         UIApplication.shared.windows.first(where: { $0.isKeyWindow })?.safeAreaInsets.top ?? 0
     }
 
+    /// Classic Notes only had room for a short, centered title.  Do the truncation
+    /// deliberately so long Chinese titles behave the same as long Latin titles.
+    private var displayTitle: String {
+        let characters = Array(title)
+        guard characters.count > 8 else { return title }
+        return String(characters.prefix(8)) + "…"
+    }
+
     var body: some View {
         ZStack {
             Image("oldos-notes-topbar")
@@ -109,10 +117,11 @@ struct RetroTitleBar<Trailing: View>: View {
                 Rectangle().fill(Color.black.opacity(0.45)).frame(height: 1)
             }
 
-            Text(title)
+            Text(displayTitle)
                 .font(.system(size: 20, weight: .bold))
                 .foregroundColor(Color.white.opacity(0.95))
                 .shadow(color: Color.black.opacity(0.6), radius: 0, x: 0, y: 1)
+                .lineLimit(1)
 
             HStack {
                 Spacer()
@@ -1100,9 +1109,20 @@ struct ContentView: View {
             }
             .overlay(
                 Button(action: { viewModel.showingList = true }) {
-                    Text("Notes").frame(height: 30).padding(.horizontal, 9)
+                    ZStack {
+                        Image("oldos-notes-back")
+                            .resizable(
+                                capInsets: EdgeInsets(top: 0, leading: 15, bottom: 0, trailing: 15),
+                                resizingMode: .stretch
+                            )
+                        Text("Notes")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
+                    }
+                    .frame(width: 76, height: 32)
                 }
-                .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color.retroLeatherDark, fontSize: 16))
+                .buttonStyle(PlainButtonStyle())
                 .padding(.leading, 14)
                 .padding(.bottom, 10),
                 alignment: .bottomLeading
@@ -1144,7 +1164,11 @@ struct ContentView: View {
             }
         }
         .frame(width: 52, height: 44)
-            .foregroundColor(Color.retroLeatherLight).buttonStyle(PlainButtonStyle()).disabled(!enabled).opacity(enabled ? 1 : 0.35)
+        .foregroundColor(Color.retroLeatherLight)
+        .buttonStyle(PlainButtonStyle())
+        .disabled(!enabled)
+        .grayscale(enabled ? 0 : 1)
+        .opacity(enabled ? 1 : 0.5)
     }
 
     private var editorDate: String { let f = DateFormatter(); f.locale = Locale(identifier: "en_US"); f.dateFormat = "MMM d  HH:mm"; return f.string(from: viewModel.currentNote.modifiedAt) }
