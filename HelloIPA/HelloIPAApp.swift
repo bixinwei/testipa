@@ -253,6 +253,7 @@ struct ActivityIndicator: UIViewRepresentable {
 
 struct StableTextEditor: UIViewRepresentable {
     @Binding var text: String
+    let header: String
     @Binding var scrollOffset: CGFloat
 
     private static let noteFont = UIFont(name: "PingFangSC-Regular", size: 18) ?? .systemFont(ofSize: 18)
@@ -272,8 +273,15 @@ struct StableTextEditor: UIViewRepresentable {
         ]
     }
 
-    private static func styledText(_ value: String) -> NSAttributedString {
+    private static func styledText(_ value: String, header: String) -> NSAttributedString {
         let styled = NSMutableAttributedString(string: value, attributes: noteAttributes())
+        let headerLength = (header as NSString).length
+        if headerLength > 0 {
+            styled.addAttributes([
+                .font: UIFont.systemFont(ofSize: 15, weight: .medium),
+                .foregroundColor: UIColor(red: 0.24, green: 0.15, blue: 0.09, alpha: 0.72)
+            ], range: NSRange(location: 0, length: headerLength))
+        }
         let fullRange = NSRange(value.startIndex..., in: value)
         let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         detector?.enumerateMatches(in: value, options: [], range: fullRange) { match, _, _ in
@@ -288,7 +296,7 @@ struct StableTextEditor: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, scrollOffset: $scrollOffset)
+        Coordinator(text: $text, scrollOffset: $scrollOffset, header: header)
     }
 
     func makeUIView(context: Context) -> UITextView {
@@ -313,7 +321,7 @@ struct StableTextEditor: UIViewRepresentable {
         textView.textContainer.lineFragmentPadding = 0
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
-        textView.attributedText = Self.styledText(text)
+        textView.attributedText = Self.styledText(displayedText, header: header)
         return textView
     }
 
@@ -323,34 +331,46 @@ struct StableTextEditor: UIViewRepresentable {
         textView.isOpaque = false
         textView.backgroundColor = .clear
         textView.overrideUserInterfaceStyle = .light
-        guard textView.text != text else { return }
+        context.coordinator.header = header
+        guard textView.text != displayedText else { return }
 
         let selectedRange = textView.selectedRange
-        textView.attributedText = Self.styledText(text)
+        textView.attributedText = Self.styledText(displayedText, header: header)
         textView.typingAttributes = Self.noteAttributes()
-        let clampedLocation = min(selectedRange.location, (textView.text as NSString).length)
+        let clampedLocation = max(headerLength, min(selectedRange.location, (textView.text as NSString).length))
         textView.selectedRange = NSRange(location: clampedLocation, length: 0)
     }
+
+    private var displayedText: String { header + "\n" + text }
+    private var headerLength: Int { (header as NSString).length + 1 }
 
     final class Coordinator: NSObject, UITextViewDelegate {
         @Binding private var text: String
         @Binding private var scrollOffset: CGFloat
+        var header: String
 
-        init(text: Binding<String>, scrollOffset: Binding<CGFloat>) {
+        init(text: Binding<String>, scrollOffset: Binding<CGFloat>, header: String) {
             _text = text
             _scrollOffset = scrollOffset
+            self.header = header
         }
 
         func textViewDidChange(_ textView: UITextView) {
-            text = textView.text
+            text = String(textView.text.dropFirst(headerLength))
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
             let selectedRange = textView.selectedRange
-            textView.attributedText = StableTextEditor.styledText(textView.text)
+            textView.attributedText = StableTextEditor.styledText(textView.text, header: header)
             textView.typingAttributes = StableTextEditor.noteAttributes()
             textView.selectedRange = selectedRange
         }
+
+        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            range.location >= headerLength
+        }
+
+        private var headerLength: Int { (header as NSString).length + 1 }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             scrollOffset = max(0, scrollView.contentOffset.y)
@@ -1133,7 +1153,6 @@ struct ShareAddressSheet: View {
 struct NotesListView: View {
     @ObservedObject var viewModel: AppViewModel
     private let dateFormatter: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US"); f.dateFormat = "M/d/yy"; return f }()
-    private var screenWidth: CGFloat { UIScreen.main.bounds.width }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1144,7 +1163,7 @@ struct NotesListView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
             }
-            .frame(width: screenWidth)
+            .frame(maxWidth: .infinity)
 
             ZStack {
                 Color.retroPaper
@@ -1178,19 +1197,19 @@ struct NotesListView: View {
                                 .foregroundColor(Color.retroLeatherDark)
                                 .padding(.vertical, 10)
                                 .padding(.horizontal, 18)
-                                .frame(width: screenWidth, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
                             }
                             .buttonStyle(PlainButtonStyle())
                         }
                     }
-                    .frame(width: screenWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .frame(width: screenWidth)
+            .frame(maxWidth: .infinity)
             .frame(maxHeight: .infinity)
         }
-        .frame(width: screenWidth)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .background(Color.black.edgesIgnoringSafeArea(.top))
         .edgesIgnoringSafeArea(.bottom)
@@ -1236,36 +1255,28 @@ struct ContentView: View {
                 .padding(.leading, 14),
                 alignment: .leading
             )
-            ZStack(alignment: .bottom) {
+            ZStack {
                 RuledPaperBackground(lineOffset: editorScrollOffset)
                 StableTextEditor(
                     text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 }),
+                    header: "Today  \(editorDate)",
                     scrollOffset: $editorScrollOffset
                 )
                     .padding(.leading, 40)
-                    .padding(.top, 42)
-                    .padding(.bottom, 92)
-
-                Text(editorDate)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(Color.retroLeatherLight.opacity(0.72))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(.leading, 40)
-                    .padding(.top, 10)
-                    .allowsHitTesting(false)
-                    .offset(y: -editorScrollOffset)
-
-                HStack(spacing: 0) {
-                    toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
-                    toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
-                    toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
-                    toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
-                }
-                .padding(.horizontal, 5)
-                .padding(.bottom, 26)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
+
+            HStack(spacing: 0) {
+                toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
+                toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
+                toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
+                toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
+            }
+            .padding(.horizontal, 5)
+            .padding(.top, 5)
+            .padding(.bottom, 26)
+            .fixedSize(horizontal: true, vertical: false)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.edgesIgnoringSafeArea(.top))
