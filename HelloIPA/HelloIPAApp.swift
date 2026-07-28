@@ -139,13 +139,6 @@ struct RetroTitleBar<Trailing: View>: View {
         return String(characters.prefix(8)) + "…"
     }
 
-    private var buildLabel: String {
-        let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = info?["CFBundleVersion"] as? String ?? "?"
-        return "v\(version) (\(build))"
-    }
-
     var body: some View {
         ZStack {
             if let topBar = oldOSImage(named: "oldos-notes-topbar") {
@@ -169,27 +162,29 @@ struct RetroTitleBar<Trailing: View>: View {
             }
 
             VStack(spacing: 0) {
-                Rectangle().fill(Color.white.opacity(0.35)).frame(height: 1)
                 Spacer()
                 Rectangle().fill(Color.black.opacity(0.45)).frame(height: 1)
             }
 
-            VStack(spacing: 0) {
-                Text(displayTitle)
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundColor(Color.white.opacity(0.95))
-                    .shadow(color: Color.black.opacity(0.6), radius: 0, x: 0, y: 1)
-                    .lineLimit(1)
-                Text(buildLabel)
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundColor(Color.white.opacity(0.7))
-            }
+            Text(displayTitle)
+                .font(.system(size: 20, weight: .bold))
+                .foregroundColor(Color.white.opacity(0.95))
+                .shadow(color: Color.black.opacity(0.6), radius: 0, x: 0, y: 1)
+                .lineLimit(1)
 
             trailing()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
                 .padding(.trailing, 14)
         }
         .frame(height: 52)
+        // This is deliberately on the shared title-bar container so every
+        // Notes screen gets the same one-pixel top highlight.
+        .overlay(
+            Rectangle()
+                .fill(Color.white.opacity(0.35))
+                .frame(height: 1),
+            alignment: .top
+        )
         .background(
             LinearGradient(
                 colors: [Color.retroLeatherLight, Color.retroLeatherDark],
@@ -354,7 +349,10 @@ struct StableTextEditor: UIViewRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            scrollOffset = max(0, scrollView.contentOffset.y)
+            // Preserve negative overscroll as well: while the user pulls the
+            // document down from its top edge, the ruled paper must travel
+            // down with its text rather than remaining fixed behind it.
+            scrollOffset = scrollView.contentOffset.y
         }
 
         func textView(_ textView: UITextView,
