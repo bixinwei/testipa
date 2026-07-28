@@ -27,6 +27,16 @@ private extension Color {
     static let retroLCDText = Color(red: 0.55, green: 0.95, blue: 0.55)
 }
 
+/// OldOS artwork is copied into the app bundle as regular PNG files, not an
+/// asset catalog. Resolve the concrete file path on device.
+private func oldOSImage(named name: String) -> Image? {
+    guard let path = Bundle.main.path(forResource: name, ofType: "png"),
+          let image = UIImage(contentsOfFile: path) else {
+        return nil
+    }
+    return Image(uiImage: image)
+}
+
 /// Glossy capsule button in the style of pre-iOS7 default UIButtons: top highlight sheen + bevel border.
 struct GlossyCapsuleButtonStyle: ButtonStyle {
     let baseColor: Color
@@ -79,17 +89,21 @@ struct OldOSHeaderControl: View {
 
     var body: some View {
         ZStack {
-            Image("oldos-notes-button-center")
-                .resizable(
-                    capInsets: EdgeInsets(top: 16, leading: 3, bottom: 16, trailing: 3),
-                    resizingMode: .stretch
-                )
+            if let buttonCenter = oldOSImage(named: "oldos-notes-button-center") {
+                buttonCenter
+                    .resizable(
+                        capInsets: EdgeInsets(top: 16, leading: 3, bottom: 16, trailing: 3),
+                        resizingMode: .stretch
+                    )
+            }
 
             if includesBackCap {
                 HStack(spacing: 0) {
-                    Image("oldos-notes-back")
-                        .resizable()
-                        .frame(width: 19)
+                    if let backCap = oldOSImage(named: "oldos-notes-back") {
+                        backCap
+                            .resizable()
+                            .frame(width: 19)
+                    }
                     Spacer(minLength: 0)
                 }
             }
@@ -102,11 +116,13 @@ struct OldOSHeaderControl: View {
             }
 
             if let iconName = iconName {
-                Image(iconName)
-                    .renderingMode(.original)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 25, height: 27)
+                if let icon = oldOSImage(named: iconName) {
+                    icon
+                        .renderingMode(.original)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 25, height: 27)
+                }
             }
         }
     }
@@ -137,12 +153,21 @@ struct RetroTitleBar<Trailing: View>: View {
         return String(characters.prefix(8)) + "…"
     }
 
+    private var buildLabel: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "v\(version) (\(build))"
+    }
+
     var body: some View {
         ZStack {
-            Image("oldos-notes-topbar")
-                .resizable()
-                .scaledToFill()
-                .clipped()
+            if let topBar = oldOSImage(named: "oldos-notes-topbar") {
+                topBar
+                    .resizable()
+                    .scaledToFill()
+                    .clipped()
+            }
 
             // A subtle cross-hatch keeps the bar from looking like a flat gradient.
             GeometryReader { geometry in
@@ -163,11 +188,16 @@ struct RetroTitleBar<Trailing: View>: View {
                 Rectangle().fill(Color.black.opacity(0.45)).frame(height: 1)
             }
 
-            Text(displayTitle)
-                .font(.system(size: 20, weight: .bold))
-                .foregroundColor(Color.white.opacity(0.95))
-                .shadow(color: Color.black.opacity(0.6), radius: 0, x: 0, y: 1)
-                .lineLimit(1)
+            VStack(spacing: 0) {
+                Text(displayTitle)
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(Color.white.opacity(0.95))
+                    .shadow(color: Color.black.opacity(0.6), radius: 0, x: 0, y: 1)
+                    .lineLimit(1)
+                Text(buildLabel)
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(Color.white.opacity(0.7))
+            }
 
             HStack {
                 Spacer()
@@ -192,10 +222,16 @@ struct RuledPaperBackground: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
-                Image("oldos-notes-body")
-                    .resizable()
-                    .scaledToFill()
-                    .clipped()
+                // Keep an opaque light paper behind the texture in every
+                // appearance mode, including if a bundled image is unavailable.
+                Color.retroPaper
+
+                if let paper = oldOSImage(named: "oldos-notes-body") {
+                    paper
+                        .resizable()
+                        .scaledToFill()
+                        .clipped()
+                }
 
                 Path { path in
                     var y: CGFloat = 30
@@ -1114,6 +1150,12 @@ struct NotesListView: View {
             }
             ZStack {
                 Color.retroPaper
+                if let paper = oldOSImage(named: "oldos-notes-body") {
+                    paper
+                        .resizable()
+                        .scaledToFill()
+                        .clipped()
+                }
                 ScrollView {
                     VStack(spacing: 1) {
                         ForEach(viewModel.notes) { note in
@@ -1194,7 +1236,7 @@ struct ContentView: View {
                 toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
             }
             .padding(.top, 8)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, alignment: .top)
             .frame(height: 140)
             .background(Color.retroPaper)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).edgesIgnoringSafeArea(.all)
@@ -1203,11 +1245,17 @@ struct ContentView: View {
     private func toolButton(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             if icon == "oldos-trash" {
-                Image("oldos-notes-trash").renderingMode(.original).resizable().scaledToFit().frame(width: 30, height: 36)
+                if let trash = oldOSImage(named: "oldos-notes-trash") {
+                    trash.renderingMode(.original).resizable().scaledToFit().frame(width: 30, height: 36)
+                }
             } else if icon == "oldos-previous" {
-                Image("oldos-notes-previous").renderingMode(.original).resizable().scaledToFit().frame(width: 34, height: 34)
+                if let previous = oldOSImage(named: "oldos-notes-previous") {
+                    previous.renderingMode(.original).resizable().scaledToFit().frame(width: 34, height: 34)
+                }
             } else if icon == "oldos-next" {
-                Image("oldos-notes-next").renderingMode(.original).resizable().scaledToFit().frame(width: 34, height: 34)
+                if let next = oldOSImage(named: "oldos-notes-next") {
+                    next.renderingMode(.original).resizable().scaledToFit().frame(width: 34, height: 34)
+                }
             } else if icon == "wifi" || icon == "wifi.slash" {
                 Image(systemName: icon).font(.system(size: 23, weight: .regular))
             } else {
