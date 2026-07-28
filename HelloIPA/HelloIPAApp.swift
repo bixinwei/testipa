@@ -17,9 +17,10 @@ enum AppDefaults {
 private extension Color {
     static let retroLeatherDark = Color(red: 0.32, green: 0.20, blue: 0.12)
     static let retroLeatherLight = Color(red: 0.56, green: 0.38, blue: 0.23)
-    static let retroPaper = Color(red: 0.98, green: 0.94, blue: 0.78)
-    static let retroPaperLine = Color(red: 0.62, green: 0.76, blue: 0.90)
-    static let retroPaperMargin = Color(red: 0.82, green: 0.38, blue: 0.38)
+    // Match the warm ivory paper and muted graphite rules of the original Notes app.
+    static let retroPaper = Color(red: 1.00, green: 0.99, blue: 0.82)
+    static let retroPaperLine = Color(red: 0.47, green: 0.48, blue: 0.39)
+    static let retroPaperMargin = Color(red: 0.47, green: 0.32, blue: 0.18)
     static let retroWoodDark = Color(red: 0.16, green: 0.10, blue: 0.06)
     static let retroWoodLight = Color(red: 0.24, green: 0.15, blue: 0.09)
     static let retroLCDBackground = Color(red: 0.05, green: 0.09, blue: 0.06)
@@ -1086,7 +1087,7 @@ struct ContentView: View {
                 toolButton("envelope", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
                 toolButton("trash", enabled: true) { showingDeleteConfirmation = true }
                 toolButton("arrow.uturn.right", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
-            }.frame(height: 66).frame(maxWidth: .infinity).background(Color.retroPaper)
+            }.frame(height: 90).frame(maxWidth: .infinity).background(Color.retroPaper)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).edgesIgnoringSafeArea(.all)
     }
 
