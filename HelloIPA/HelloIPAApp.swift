@@ -69,13 +69,58 @@ struct GlossyCapsuleButtonStyle: ButtonStyle {
     }
 }
 
+/// The Notes header controls are assembled from the same three-slice artwork
+/// OldOS uses: a stretchable dark center and, for a back control, its arrow cap.
+/// `NotesBack` alone is only the left cap, not a complete button.
+struct OldOSHeaderControl: View {
+    let title: String?
+    let iconName: String?
+    var includesBackCap = false
+
+    var body: some View {
+        ZStack {
+            Image("oldos-notes-button-center")
+                .resizable(
+                    capInsets: EdgeInsets(top: 16, leading: 3, bottom: 16, trailing: 3),
+                    resizingMode: .stretch
+                )
+
+            if includesBackCap {
+                HStack(spacing: 0) {
+                    Image("oldos-notes-back")
+                        .resizable()
+                        .frame(width: 19)
+                    Spacer(minLength: 0)
+                }
+            }
+
+            if let title = title {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                    .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
+            }
+
+            if let iconName = iconName {
+                Image(iconName)
+                    .renderingMode(.original)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 25, height: 27)
+            }
+        }
+    }
+}
+
 /// Leather-textured top bar echoing the iOS 6 Notes/Contacts chrome.
 struct RetroTitleBar<Trailing: View>: View {
     let title: String
+    let truncatesTitle: Bool
     let trailing: () -> Trailing
 
-    init(title: String, @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }) {
+    init(title: String, truncatesTitle: Bool = false, @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }) {
         self.title = title
+        self.truncatesTitle = truncatesTitle
         self.trailing = trailing
     }
 
@@ -86,6 +131,7 @@ struct RetroTitleBar<Trailing: View>: View {
     /// Classic Notes only had room for a short, centered title.  Do the truncation
     /// deliberately so long Chinese titles behave the same as long Latin titles.
     private var displayTitle: String {
+        guard truncatesTitle else { return title }
         let characters = Array(title)
         guard characters.count > 8 else { return title }
         return String(characters.prefix(8)) + "…"
@@ -224,7 +270,11 @@ struct StableTextEditor: UIViewRepresentable {
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
         textView.delegate = context.coordinator
+        // A transparent UIKit view must not declare itself opaque. Otherwise the
+        // compositor is allowed to substitute a black backing store in Dark Mode.
+        textView.isOpaque = false
         textView.backgroundColor = .clear
+        textView.overrideUserInterfaceStyle = .light
         textView.textColor = Self.noteTextColor
         textView.font = Self.noteFont
         textView.typingAttributes = Self.noteAttributes()
@@ -243,6 +293,11 @@ struct StableTextEditor: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
+        // Keep the paper visible when the device changes appearance while the
+        // editor is on screen.
+        textView.isOpaque = false
+        textView.backgroundColor = .clear
+        textView.overrideUserInterfaceStyle = .light
         guard textView.text != text else { return }
 
         let selectedRange = textView.selectedRange
@@ -1051,8 +1106,11 @@ struct NotesListView: View {
     var body: some View {
         VStack(spacing: 0) {
             RetroTitleBar(title: "Notes (\(viewModel.notes.count))") {
-                Button(action: viewModel.createNote) { Image("oldos-toolbar-plus").resizable().scaledToFit().frame(width: 25, height: 27) }
-                    .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color.retroLeatherDark, fontSize: 24))
+                Button(action: viewModel.createNote) {
+                    OldOSHeaderControl(title: nil, iconName: "oldos-toolbar-plus")
+                        .frame(width: 50, height: 32)
+                }
+                .buttonStyle(PlainButtonStyle())
             }
             ZStack {
                 Color.retroPaper
@@ -1103,23 +1161,16 @@ struct ContentView: View {
 
     private var editor: some View {
         VStack(spacing: 0) {
-            RetroTitleBar(title: viewModel.currentNote.title) {
-                Button(action: viewModel.createNote) { Image("oldos-toolbar-plus").resizable().scaledToFit().frame(width: 25, height: 27) }
-                    .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color.retroLeatherDark, fontSize: 20))
+            RetroTitleBar(title: viewModel.currentNote.title, truncatesTitle: true) {
+                Button(action: viewModel.createNote) {
+                    OldOSHeaderControl(title: nil, iconName: "oldos-toolbar-plus")
+                        .frame(width: 50, height: 32)
+                }
+                .buttonStyle(PlainButtonStyle())
             }
             .overlay(
                 Button(action: { viewModel.showingList = true }) {
-                    ZStack {
-                        Image("oldos-notes-back")
-                            .resizable(
-                                capInsets: EdgeInsets(top: 0, leading: 15, bottom: 0, trailing: 15),
-                                resizingMode: .stretch
-                            )
-                        Text("Notes")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.white)
-                            .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
-                    }
+                    OldOSHeaderControl(title: "Notes", iconName: nil, includesBackCap: true)
                     .frame(width: 76, height: 32)
                 }
                 .buttonStyle(PlainButtonStyle())
