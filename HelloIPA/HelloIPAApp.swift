@@ -325,8 +325,9 @@ struct StableTextEditor: UIViewRepresentable {
         textView.alwaysBounceVertical = true
         textView.contentInset = .zero
         textView.scrollIndicatorInsets = .zero
-        // The first baseline sits just above the first ruled line (at y = 30).
-        textView.textContainerInset = UIEdgeInsets(top: 7, left: 10, bottom: 14, right: 10)
+        // Shift each glyph run down by half the remaining leading so it sits
+        // in the middle of its 26pt ruled-paper row rather than on a rule.
+        textView.textContainerInset = UIEdgeInsets(top: 13, left: 10, bottom: 14, right: 10)
         textView.textContainer.lineFragmentPadding = 0
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
@@ -1240,29 +1241,26 @@ struct ContentView: View {
                 .padding(.bottom, 10),
                 alignment: .bottomLeading
             )
-            ZStack {
+            ZStack(alignment: .bottom) {
                 RuledPaperBackground()
-                VStack(spacing: 0) {
-                    ZStack {
-                        VStack {
-                            HStack { Text("Today").font(.system(size: 18, weight: .bold)); Spacer(); Text(editorDate).font(.system(size: 18)) }
-                                .foregroundColor(Color.retroLeatherLight).padding(.horizontal, 34).padding(.top, 14)
-                            Spacer()
-                        }
-                        StableTextEditor(text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 })).padding(.leading, 40).padding(.top, 70)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                    HStack(spacing: 18) {
-                        toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
-                        toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
-                        toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
-                        toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
-                    }
-                    .padding(.top, 8)
-                    .frame(maxWidth: .infinity, alignment: .top)
-                    .frame(height: 140)
+                VStack {
+                    HStack { Text("Today").font(.system(size: 18, weight: .bold)); Spacer(); Text(editorDate).font(.system(size: 18)) }
+                        .foregroundColor(Color.retroLeatherLight).padding(.horizontal, 34).padding(.top, 14)
+                    Spacer()
                 }
+                StableTextEditor(text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 }))
+                    .padding(.leading, 40)
+                    .padding(.top, 70)
+                    .padding(.bottom, 92)
+
+                HStack(spacing: 18) {
+                    toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
+                    toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
+                    toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
+                    toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
+                }
+                .padding(.bottom, 26)
+                .frame(maxWidth: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).edgesIgnoringSafeArea(.all)
