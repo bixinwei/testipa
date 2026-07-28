@@ -1245,11 +1245,16 @@ struct ContentView: View {
                     .padding(.top, 42)
                     .padding(.bottom, 92)
 
-                Text("Today  \(editorDate)")
+                HStack {
+                    Text("Today")
+                    Spacer()
+                    Text(editorDate)
+                }
                     .font(.custom("MarkerFelt-Thin", size: 16))
                     .foregroundColor(Color.retroLeatherLight.opacity(0.72))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(.leading, 40)
+                    .padding(.trailing, 34)
                     .padding(.top, 10)
                     .allowsHitTesting(false)
                     .offset(y: -editorScrollOffset)
