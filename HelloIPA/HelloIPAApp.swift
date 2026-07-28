@@ -278,10 +278,7 @@ struct StableTextEditor: UIViewRepresentable {
         return [
             .font: noteFont,
             .foregroundColor: noteTextColor,
-            .paragraphStyle: paragraphStyle,
-            // Marker Felt's glyph metrics sit high within a fixed 26pt line.
-            // Lower the baseline so the visible letters center between rules.
-            .baselineOffset: -5.0
+            .paragraphStyle: paragraphStyle
         ]
     }
 
