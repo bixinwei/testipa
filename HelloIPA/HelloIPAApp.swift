@@ -122,17 +122,20 @@ struct OldOSHeaderControl: View {
 struct RetroTitleBar<Trailing: View>: View {
     let title: String
     let truncatesTitle: Bool
+    let showsBuildLabel: Bool
     let usesOverlayHighlight: Bool
     let trailing: () -> Trailing
 
     init(
         title: String,
         truncatesTitle: Bool = false,
+        showsBuildLabel: Bool = true,
         usesOverlayHighlight: Bool = false,
         @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }
     ) {
         self.title = title
         self.truncatesTitle = truncatesTitle
+        self.showsBuildLabel = showsBuildLabel
         self.usesOverlayHighlight = usesOverlayHighlight
         self.trailing = trailing
     }
@@ -144,6 +147,13 @@ struct RetroTitleBar<Trailing: View>: View {
         let characters = Array(title)
         guard characters.count > 8 else { return title }
         return String(characters.prefix(8)) + "…"
+    }
+
+    private var buildLabel: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "v\(version) (\(build))"
     }
 
     var body: some View {
@@ -182,6 +192,11 @@ struct RetroTitleBar<Trailing: View>: View {
                     .foregroundColor(Color.white.opacity(0.95))
                     .shadow(color: Color.black.opacity(0.6), radius: 0, x: 0, y: 1)
                     .lineLimit(1)
+                if showsBuildLabel {
+                    Text(buildLabel)
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(Color.white.opacity(0.7))
+                }
             }
 
             trailing()
@@ -1152,6 +1167,7 @@ struct NotesListView: View {
         VStack(spacing: 0) {
             RetroTitleBar(
                 title: "Notes (\(viewModel.notes.count))",
+                showsBuildLabel: false,
                 usesOverlayHighlight: true
             ) {
                 Button(action: viewModel.createNote) {
