@@ -1066,13 +1066,18 @@ struct ContentView: View {
     private var editor: some View {
         VStack(spacing: 0) {
             RetroTitleBar(title: viewModel.currentNote.title) {
-                HStack(spacing: 8) {
-                    Button(action: { viewModel.showingList = true }) { Text("Notes").frame(height: 30).padding(.horizontal, 7) }
-                        .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color.retroLeatherDark, fontSize: 16))
-                    Button(action: viewModel.createNote) { Image(systemName: "plus").frame(width: 34, height: 30) }
-                        .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color.retroLeatherDark, fontSize: 18))
-                }
+                Button(action: viewModel.createNote) { Image(systemName: "plus").frame(width: 42, height: 30) }
+                    .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color.retroLeatherDark, fontSize: 20))
             }
+            .overlay(
+                Button(action: { viewModel.showingList = true }) {
+                    Text("Notes").frame(height: 30).padding(.horizontal, 9)
+                }
+                .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color.retroLeatherDark, fontSize: 16))
+                .padding(.leading, 14)
+                .padding(.bottom, 10),
+                alignment: .bottomLeading
+            )
             ZStack {
                 RuledPaperBackground()
                 VStack {
