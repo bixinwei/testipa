@@ -212,7 +212,6 @@ struct RetroTitleBar<Trailing: View>: View {
 /// Yellow ruled legal-pad background, à la the original iOS Notes app.
 struct RuledPaperBackground: View {
     var lineOffset: CGFloat = 0
-    var firstRuleY: CGFloat = 30
 
     var body: some View {
         GeometryReader { geometry in
@@ -229,15 +228,13 @@ struct RuledPaperBackground: View {
                 }
 
                 Path { path in
-                    let lineHeight: CGFloat = 26
-                    // The anchor comes from TextKit's first line fragment, so
-                    // the paper rules and UITextView share one layout system.
-                    var y = firstRuleY - lineOffset
-                    while y > 0 { y -= lineHeight }
+                    let phase = lineOffset.truncatingRemainder(dividingBy: 26)
+                    var y: CGFloat = 30 - phase
+                    while y > 0 { y -= 26 }
                     while y < geometry.size.height {
                         path.move(to: CGPoint(x: 0, y: y))
                         path.addLine(to: CGPoint(x: geometry.size.width, y: y))
-                        y += lineHeight
+                        y += 26
                     }
                 }
                 .stroke(Color.retroPaperLine, lineWidth: 1)
@@ -266,8 +263,6 @@ struct ActivityIndicator: UIViewRepresentable {
 struct StableTextEditor: UIViewRepresentable {
     @Binding var text: String
     @Binding var scrollOffset: CGFloat
-    @Binding var firstRuleY: CGFloat
-    let paperTopInset: CGFloat
 
     // Match the handwritten face used for each title in the Notes list.
     private static let noteFont = UIFont(name: "MarkerFelt-Thin", size: 16) ?? .systemFont(ofSize: 16)
@@ -283,7 +278,10 @@ struct StableTextEditor: UIViewRepresentable {
         return [
             .font: noteFont,
             .foregroundColor: noteTextColor,
-            .paragraphStyle: paragraphStyle
+            .paragraphStyle: paragraphStyle,
+            // Marker Felt's glyph metrics sit high within a fixed 26pt line.
+            // Lower the baseline so the visible letters center between rules.
+            .baselineOffset: -5.0
         ]
     }
 
@@ -303,7 +301,7 @@ struct StableTextEditor: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, scrollOffset: $scrollOffset, firstRuleY: $firstRuleY, paperTopInset: paperTopInset)
+        Coordinator(text: $text, scrollOffset: $scrollOffset)
     }
 
     func makeUIView(context: Context) -> UITextView {
@@ -329,7 +327,6 @@ struct StableTextEditor: UIViewRepresentable {
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
         textView.attributedText = Self.styledText(text)
-        DispatchQueue.main.async { context.coordinator.updateRuleAnchor(for: textView) }
         return textView
     }
 
@@ -339,32 +336,26 @@ struct StableTextEditor: UIViewRepresentable {
         textView.isOpaque = false
         textView.backgroundColor = .clear
         textView.overrideUserInterfaceStyle = .light
-        if textView.text != text {
-            let selectedRange = textView.selectedRange
-            textView.attributedText = Self.styledText(text)
-            textView.typingAttributes = Self.noteAttributes()
-            let clampedLocation = min(selectedRange.location, (textView.text as NSString).length)
-            textView.selectedRange = NSRange(location: clampedLocation, length: 0)
-        }
-        DispatchQueue.main.async { context.coordinator.updateRuleAnchor(for: textView) }
+        guard textView.text != text else { return }
+
+        let selectedRange = textView.selectedRange
+        textView.attributedText = Self.styledText(text)
+        textView.typingAttributes = Self.noteAttributes()
+        let clampedLocation = min(selectedRange.location, (textView.text as NSString).length)
+        textView.selectedRange = NSRange(location: clampedLocation, length: 0)
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
         @Binding private var text: String
         @Binding private var scrollOffset: CGFloat
-        @Binding private var firstRuleY: CGFloat
-        private let paperTopInset: CGFloat
 
-        init(text: Binding<String>, scrollOffset: Binding<CGFloat>, firstRuleY: Binding<CGFloat>, paperTopInset: CGFloat) {
+        init(text: Binding<String>, scrollOffset: Binding<CGFloat>) {
             _text = text
             _scrollOffset = scrollOffset
-            _firstRuleY = firstRuleY
-            self.paperTopInset = paperTopInset
         }
 
         func textViewDidChange(_ textView: UITextView) {
             text = textView.text
-            updateRuleAnchor(for: textView)
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
@@ -379,19 +370,6 @@ struct StableTextEditor: UIViewRepresentable {
             // document down from its top edge, the ruled paper must travel
             // down with its text rather than remaining fixed behind it.
             scrollOffset = scrollView.contentOffset.y
-        }
-
-        func updateRuleAnchor(for textView: UITextView) {
-            textView.layoutManager.ensureLayout(for: textView.textContainer)
-            let glyphRange = textView.layoutManager.glyphRange(for: textView.textContainer)
-            let firstFragment: CGRect
-            if glyphRange.length > 0 {
-                firstFragment = textView.layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
-            } else {
-                firstFragment = CGRect(x: 0, y: 0, width: 0, height: StableTextEditor.noteLineHeight)
-            }
-            let anchor = paperTopInset + textView.textContainerInset.top + firstFragment.maxY
-            if abs(firstRuleY - anchor) > 0.5 { firstRuleY = anchor }
         }
 
         func textView(_ textView: UITextView,
@@ -1242,7 +1220,6 @@ struct ContentView: View {
     @ObservedObject var viewModel: AppViewModel
     @State private var showingDeleteConfirmation = false
     @State private var editorScrollOffset: CGFloat = 0
-    @State private var editorFirstRuleY: CGFloat = 69
 
     var body: some View {
         ZStack {
@@ -1279,12 +1256,10 @@ struct ContentView: View {
                 alignment: .leading
             )
             ZStack(alignment: .bottom) {
-                RuledPaperBackground(lineOffset: editorScrollOffset, firstRuleY: editorFirstRuleY)
+                RuledPaperBackground(lineOffset: editorScrollOffset)
                 StableTextEditor(
                     text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 }),
-                    scrollOffset: $editorScrollOffset,
-                    firstRuleY: $editorFirstRuleY,
-                    paperTopInset: 30
+                    scrollOffset: $editorScrollOffset
                 )
                     .padding(.leading, 40)
                     // Reserve only the single Today/date row above the text.
