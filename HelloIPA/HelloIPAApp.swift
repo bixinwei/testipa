@@ -1117,10 +1117,10 @@ struct ContentView: View {
                 StableTextEditor(text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 })).padding(.leading, 40).padding(.top, 70)
             }
             HStack(spacing: 18) {
-                toolButton("arrow.uturn.left", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
+                toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
                 toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
-                toolButton("trash", enabled: true) { showingDeleteConfirmation = true }
-                toolButton("arrow.uturn.right", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
+                toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
+                toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
             }
             .padding(.top, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -1131,8 +1131,12 @@ struct ContentView: View {
 
     private func toolButton(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            if icon == "trash" {
-                Image("oldos-toolbar-trash").resizable().renderingMode(.template).scaledToFit().frame(width: 28, height: 34)
+            if icon == "oldos-trash" {
+                Image("oldos-notes-trash").renderingMode(.original).resizable().scaledToFit().frame(width: 30, height: 36)
+            } else if icon == "oldos-previous" {
+                Image("oldos-notes-previous").renderingMode(.original).resizable().scaledToFit().frame(width: 34, height: 34)
+            } else if icon == "oldos-next" {
+                Image("oldos-notes-next").renderingMode(.original).resizable().scaledToFit().frame(width: 34, height: 34)
             } else if icon == "wifi" || icon == "wifi.slash" {
                 Image(systemName: icon).font(.system(size: 23, weight: .regular))
             } else {
