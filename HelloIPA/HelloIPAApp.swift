@@ -80,33 +80,16 @@ struct GlossyCapsuleButtonStyle: ButtonStyle {
     }
 }
 
-/// The Notes header controls are assembled from the same three-slice artwork
-/// OldOS uses: a stretchable dark center and, for a back control, its arrow cap.
-/// `NotesBack` alone is only the left cap, not a complete button.
+/// The Notes header controls use the stretchable dark center artwork. Keeping
+/// every control rectangular makes the list and editor title bars share one
+/// continuous silhouette.
 struct OldOSHeaderControl: View {
     let title: String?
     let iconName: String?
-    var includesBackCap = false
 
     var body: some View {
         ZStack {
-            if includesBackCap {
-                HStack(spacing: 0) {
-                    if let backCap = oldOSImage(named: "oldos-notes-back") {
-                        backCap
-                            .frame(width: 19, height: 30)
-                    }
-                    if let buttonCenter = oldOSImage(named: "oldos-notes-button-center") {
-                        buttonCenter
-                            .resizable(
-                                capInsets: EdgeInsets(top: 10, leading: 5, bottom: 10, trailing: 5),
-                                resizingMode: .stretch
-                            )
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-            } else if let buttonCenter = oldOSImage(named: "oldos-notes-button-center") {
+            if let buttonCenter = oldOSImage(named: "oldos-notes-button-center") {
                 buttonCenter
                     .resizable(
                         capInsets: EdgeInsets(top: 10, leading: 5, bottom: 10, trailing: 5),
@@ -119,7 +102,6 @@ struct OldOSHeaderControl: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.white)
                     .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
-                    .padding(.leading, includesBackCap ? 9 : 0)
             }
 
             if let iconName = iconName {
@@ -1247,38 +1229,40 @@ struct ContentView: View {
             }
             .overlay(
                 Button(action: { viewModel.showingList = true }) {
-                    OldOSHeaderControl(title: "Notes", iconName: nil, includesBackCap: true)
-                    .frame(width: 70, height: 30)
+                    OldOSHeaderControl(title: "Notes", iconName: nil)
+                        .frame(width: 62, height: 30)
                 }
                 .buttonStyle(PlainButtonStyle())
-                .padding(.leading, 14)
-                .padding(.bottom, 10),
-                alignment: .bottomLeading
+                .padding(.leading, 14),
+                alignment: .leading
             )
             ZStack(alignment: .bottom) {
                 RuledPaperBackground(lineOffset: editorScrollOffset)
-                VStack {
-                    HStack { Text("Today").font(.system(size: 18, weight: .bold)); Spacer(); Text(editorDate).font(.system(size: 18)) }
-                        .foregroundColor(Color.retroLeatherLight).padding(.horizontal, 34).padding(.top, 14)
-                    Spacer()
-                }
-                .offset(y: -editorScrollOffset)
                 StableTextEditor(
                     text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 }),
                     scrollOffset: $editorScrollOffset
                 )
                     .padding(.leading, 40)
-                    .padding(.top, 70)
+                    .padding(.top, 42)
                     .padding(.bottom, 92)
 
-                HStack(spacing: 18) {
+                Text(editorDate)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(Color.retroLeatherLight.opacity(0.72))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(.leading, 40)
+                    .padding(.top, 10)
+                    .allowsHitTesting(false)
+                    .offset(y: -editorScrollOffset)
+
+                HStack(spacing: 0) {
                     toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
                     toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
                     toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
                     toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
                 }
+                .padding(.horizontal, 5)
                 .padding(.bottom, 26)
-                .frame(maxWidth: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
