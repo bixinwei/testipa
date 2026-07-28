@@ -1005,7 +1005,7 @@ struct NotesListView: View {
             ZStack {
                 Color.retroWoodDark
                 ScrollView {
-                    LazyVStack(spacing: 1) {
+                    VStack(spacing: 1) {
                         ForEach(viewModel.notes) { note in
                             Button(action: { viewModel.select(note) }) {
                                 VStack(alignment: .leading, spacing: 5) {
