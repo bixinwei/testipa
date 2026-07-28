@@ -108,23 +108,19 @@ struct OldOSHeaderControl: View {
                 }
             }
 
-            if includesBackCap, let arrow = oldOSImage(named: "oldos-notes-back-arrow") {
-                HStack {
-                    arrow
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 13, height: 13)
-                        .padding(.leading, 7)
-                    Spacer(minLength: 0)
-                }
-            }
-
             if let title = title {
-                Text(title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white)
-                    .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
-                    .padding(.leading, includesBackCap ? 18 : 0)
+                HStack(spacing: 4) {
+                    if includesBackCap, let arrow = oldOSImage(named: "oldos-notes-back-arrow") {
+                        arrow
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 11, height: 12)
+                    }
+                    Text(title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                        .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
+                }
             }
 
             if let iconName = iconName {
@@ -152,9 +148,9 @@ struct RetroTitleBar<Trailing: View>: View {
         self.trailing = trailing
     }
 
-    private var topSafeAreaInset: CGFloat {
-        UIApplication.shared.windows.first(where: { $0.isKeyWindow })?.safeAreaInsets.top ?? 0
-    }
+    // The status-area query can change during a SwiftUI view transition, which
+    // made the list and editor title bars different heights on the same phone.
+    private let topSafeAreaInset: CGFloat = 44
 
     /// Classic Notes only had room for a short, centered title.  Do the truncation
     /// deliberately so long Chinese titles behave the same as long Latin titles.
