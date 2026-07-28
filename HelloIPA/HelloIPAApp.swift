@@ -78,6 +78,10 @@ struct RetroTitleBar<Trailing: View>: View {
         self.trailing = trailing
     }
 
+    private var topSafeAreaInset: CGFloat {
+        UIApplication.shared.windows.first(where: { $0.isKeyWindow })?.safeAreaInsets.top ?? 0
+    }
+
     var body: some View {
         ZStack {
             LinearGradient(
@@ -117,6 +121,14 @@ struct RetroTitleBar<Trailing: View>: View {
             }
         }
         .frame(height: 52)
+        .padding(.top, topSafeAreaInset)
+        .background(
+            LinearGradient(
+                colors: [Color.retroLeatherLight, Color.retroLeatherDark],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
     }
 }
 
@@ -1010,12 +1022,12 @@ struct NotesListView: View {
                         ForEach(viewModel.notes) { note in
                             Button(action: { viewModel.select(note) }) {
                                 HStack(spacing: 12) {
-                                        Text(note.title).font(.custom("MarkerFelt-Thin", size: 25)).lineLimit(1).truncationMode(.tail)
+                                        Text(note.title).font(.custom("MarkerFelt-Thin", size: 20)).lineLimit(1).truncationMode(.tail)
                                         Spacer(minLength: 8)
                                         Text(dateFormatter.string(from: note.modifiedAt)).font(.system(size: 17)).foregroundColor(.gray).fixedSize()
                                         Image(systemName: "chevron.right").font(.system(size: 22, weight: .bold)).foregroundColor(Color.retroLeatherDark.opacity(0.7))
                                 }
-                                .foregroundColor(Color.retroLeatherDark).padding(.vertical, 17).padding(.horizontal, 18)
+                                .foregroundColor(Color.retroLeatherDark).padding(.vertical, 13).padding(.horizontal, 18)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(Color.retroPaper)
                                 .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
@@ -1026,7 +1038,7 @@ struct NotesListView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.background(Color.black).edgesIgnoringSafeArea(.bottom)
+        }.background(Color.black).edgesIgnoringSafeArea(.all)
     }
 }
 
@@ -1075,7 +1087,7 @@ struct ContentView: View {
                 toolButton("trash", enabled: true) { showingDeleteConfirmation = true }
                 toolButton("arrow.uturn.right", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
             }.frame(height: 66).frame(maxWidth: .infinity).background(Color.retroPaper)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).edgesIgnoringSafeArea(.bottom)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).edgesIgnoringSafeArea(.all)
     }
 
     private func toolButton(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
