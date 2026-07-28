@@ -800,23 +800,57 @@ final class AppViewModel: ObservableObject {
 
 struct ShareAddressSheet: View {
     @ObservedObject var server: LocalTextShareServer
-    @Environment(\.presentationMode) private var presentationMode
+    let onClose: () -> Void
     @State private var showingCopiedToast = false
 
     var body: some View {
-        NavigationView {
-            ZStack(alignment: .top) {
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                RetroTitleBar(title: "共享地址") {
+                    Button(action: onClose) {
+                        Text("关闭")
+                            .frame(width: 50, height: 30)
+                    }
+                    .buttonStyle(GlossyCapsuleButtonStyle(
+                        baseColor: Color(red: 0.12, green: 0.34, blue: 0.67),
+                        fontSize: 14
+                    ))
+                }
+
+                ZStack {
+                    Color.retroWoodDark
+                    LinearGradient(
+                        colors: [Color.retroWoodLight, Color.retroWoodDark],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .opacity(0.7)
+
+                    RuledPaperBackground()
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(Color.black.opacity(0.62), lineWidth: 2)
+                        )
+                        .shadow(color: .black.opacity(0.65), radius: 2, x: 0, y: 2)
+                        .padding(12)
+
                 VStack(alignment: .leading, spacing: 18) {
                     if let shareURL = server.shareURL {
                         Text("请让电脑和手机连接同一个 Wi-Fi，然后在浏览器打开下面这个地址：")
-                            .font(.body)
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundColor(Color.retroWoodDark)
 
                         Text(shareURL.absoluteString)
                             .font(.system(.body, design: .monospaced))
                             .padding(14)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .background(Color.white.opacity(0.42))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .stroke(Color.retroLeatherDark.opacity(0.55), lineWidth: 1)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
 
                         Button(action: copyAddress) {
                             HStack {
@@ -831,18 +865,18 @@ struct ShareAddressSheet: View {
 
                         Text("电脑打开后会看到当前这段文本内容。")
                             .font(.footnote)
-                            .foregroundColor(Color(UIColor.secondaryLabel))
+                            .foregroundColor(Color.retroLeatherDark)
                     } else if let errorMessage = server.errorMessage {
                         Text("分享启动失败")
                             .font(.headline)
 
                         Text(errorMessage)
-                            .foregroundColor(Color(UIColor.secondaryLabel))
+                            .foregroundColor(Color(red: 0.62, green: 0.17, blue: 0.12))
                     } else {
                         HStack(spacing: 10) {
                             ActivityIndicator()
                             Text("正在启动局域网分享服务...")
-                                .foregroundColor(Color(UIColor.secondaryLabel))
+                                .foregroundColor(Color.retroLeatherDark)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -850,8 +884,8 @@ struct ShareAddressSheet: View {
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(20)
-                .background(Color.retroPaper)
+                .padding(32)
+                }
 
                 if showingCopiedToast {
                     Text("已复制")
@@ -864,11 +898,8 @@ struct ShareAddressSheet: View {
                         .padding(.top, 12)
                 }
             }
-            .navigationBarTitle("", displayMode: .inline)
-            .navigationBarItems(trailing: Button("关闭") {
-                presentationMode.wrappedValue.dismiss()
-            })
         }
+        .edgesIgnoringSafeArea(.all)
     }
 
     private func copyAddress() {
@@ -889,21 +920,22 @@ struct ContentView: View {
     @ObservedObject var viewModel: AppViewModel
 
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                RetroTitleBar(title: "局域网便笺")
+        ZStack {
+            NavigationView {
+                VStack(spacing: 0) {
+                    RetroTitleBar(title: "局域网便笺")
 
-                ZStack {
-                    Color.retroWoodDark
+                    ZStack {
+                        Color.retroWoodDark
 
-                    LinearGradient(
-                        colors: [Color.retroWoodLight, Color.retroWoodDark],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    .opacity(0.7)
+                        LinearGradient(
+                            colors: [Color.retroWoodLight, Color.retroWoodDark],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        .opacity(0.7)
 
-                    VStack(spacing: 14) {
+                        VStack(spacing: 14) {
                         ZStack {
                             RuledPaperBackground()
 
@@ -934,13 +966,20 @@ struct ContentView: View {
                         ))
                         .padding(.bottom, 16)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 14)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 14)
+                    }
+                }
+                .navigationBarHidden(true)
+            }
+            .edgesIgnoringSafeArea(.all)
+
+            if viewModel.showingShareSheet {
+                ShareAddressSheet(server: viewModel.server) {
+                    viewModel.showingShareSheet = false
                 }
             }
-            .navigationBarHidden(true)
         }
-        .edgesIgnoringSafeArea(.all)
         .onAppear {
             viewModel.server.updateSharedText(viewModel.text)
         }
@@ -949,12 +988,6 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             viewModel.persistText()
-        }
-        .sheet(isPresented: Binding(
-            get: { viewModel.showingShareSheet },
-            set: { viewModel.showingShareSheet = $0 }
-        )) {
-            ShareAddressSheet(server: viewModel.server)
         }
     }
 
