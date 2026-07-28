@@ -133,27 +133,12 @@ struct RetroTitleBar<Trailing: View>: View {
     }
 }
 
-/// Warm, slightly shaded paper stock used by both the list and note pages.
-struct CreamPaperGradient: View {
-    var body: some View {
-        LinearGradient(
-            colors: [
-                Color(red: 1.00, green: 0.95, blue: 0.63),
-                Color(red: 1.00, green: 0.985, blue: 0.80),
-                Color(red: 0.99, green: 0.94, blue: 0.63)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-}
-
 /// Yellow ruled legal-pad background, à la the original iOS Notes app.
 struct RuledPaperBackground: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
-                CreamPaperGradient()
+                Color.retroPaper
 
                 Path { path in
                     var y: CGFloat = 30
@@ -1059,7 +1044,7 @@ struct NotesListView: View {
                     .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color.retroLeatherDark, fontSize: 24))
             }
             ZStack {
-                CreamPaperGradient()
+                Color.retroPaper
                 ScrollView {
                     VStack(spacing: 1) {
                         ForEach(viewModel.notes) { note in
@@ -1072,7 +1057,7 @@ struct NotesListView: View {
                                 }
                                 .foregroundColor(Color.retroLeatherDark).padding(.vertical, 10).padding(.horizontal, 18)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(CreamPaperGradient())
+                                .background(Color.retroPaper)
                                 .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
                             }
                         }
@@ -1134,7 +1119,11 @@ struct ContentView: View {
                 toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
                 toolButton("trash", enabled: true) { showingDeleteConfirmation = true }
                 toolButton("arrow.uturn.right", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
-            }.frame(height: 140).frame(maxWidth: .infinity).background(CreamPaperGradient())
+            }
+            .padding(.top, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(height: 140)
+            .background(Color.retroPaper)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).edgesIgnoringSafeArea(.all)
     }
 
