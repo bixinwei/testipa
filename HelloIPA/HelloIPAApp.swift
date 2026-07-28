@@ -319,7 +319,7 @@ struct StableTextEditor: UIViewRepresentable {
         textView.scrollIndicatorInsets = .zero
         // Shift each glyph run down by half the remaining leading so it sits
         // in the middle of its 26pt ruled-paper row rather than on a rule.
-        textView.textContainerInset = UIEdgeInsets(top: 13, left: 10, bottom: 14, right: 10)
+        textView.textContainerInset = UIEdgeInsets(top: 7, left: 10, bottom: 6, right: 10)
         textView.textContainer.lineFragmentPadding = 0
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
