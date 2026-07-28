@@ -124,6 +124,7 @@ struct OldOSHeaderControl: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.white)
                     .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
+                    .padding(.leading, includesBackCap ? 18 : 0)
             }
 
             if let iconName = iconName {
@@ -210,11 +211,9 @@ struct RetroTitleBar<Trailing: View>: View {
                     .foregroundColor(Color.white.opacity(0.7))
             }
 
-            HStack {
-                Spacer()
-                trailing()
-                    .padding(.trailing, 14)
-            }
+            trailing()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                .padding(.trailing, 14)
         }
         .frame(height: 52)
         .padding(.top, topSafeAreaInset)
@@ -1177,10 +1176,17 @@ struct NotesListView: View {
                                             .font(.custom("MarkerFelt-Thin", size: 16))
                                             .lineLimit(1)
                                             .truncationMode(.tail)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                                        Text(dateFormatter.string(from: note.modifiedAt))
+                                            .font(.system(size: 17))
+                                            .foregroundColor(.gray)
+                                            .fixedSize()
                                             .layoutPriority(1)
-                                        Text(dateFormatter.string(from: note.modifiedAt)).font(.system(size: 17)).foregroundColor(.gray).fixedSize()
-                                        Image(systemName: "chevron.right").font(.system(size: 22, weight: .bold)).foregroundColor(Color.retroLeatherDark.opacity(0.7))
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 22, weight: .bold))
+                                            .foregroundColor(Color.retroLeatherDark.opacity(0.7))
+                                            .layoutPriority(1)
                                 }
                                 .foregroundColor(Color.retroLeatherDark).padding(.vertical, 10).padding(.horizontal, 18)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1240,25 +1246,29 @@ struct ContentView: View {
             )
             ZStack {
                 RuledPaperBackground()
-                VStack {
-                    HStack { Text("Today").font(.system(size: 18, weight: .bold)); Spacer(); Text(editorDate).font(.system(size: 18)) }
-                        .foregroundColor(Color.retroLeatherLight).padding(.horizontal, 34).padding(.top, 14)
-                    Spacer()
+                VStack(spacing: 0) {
+                    ZStack {
+                        VStack {
+                            HStack { Text("Today").font(.system(size: 18, weight: .bold)); Spacer(); Text(editorDate).font(.system(size: 18)) }
+                                .foregroundColor(Color.retroLeatherLight).padding(.horizontal, 34).padding(.top, 14)
+                            Spacer()
+                        }
+                        StableTextEditor(text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 })).padding(.leading, 40).padding(.top, 70)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    HStack(spacing: 18) {
+                        toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
+                        toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
+                        toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
+                        toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
+                    }
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .frame(height: 140)
                 }
-                StableTextEditor(text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 })).padding(.leading, 40).padding(.top, 70)
             }
-            ZStack {
-                RuledPaperBackground()
-                HStack(spacing: 18) {
-                    toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
-                    toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
-                    toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
-                    toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
-                }
-                .padding(.top, 8)
-                .frame(maxWidth: .infinity, alignment: .top)
-            }
-            .frame(height: 140)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).edgesIgnoringSafeArea(.all)
     }
 
