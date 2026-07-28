@@ -18,6 +18,7 @@
 		A00000000000000000000028 /* oldos-notes-previous.png in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000038 /* oldos-notes-previous.png */; };
 		A00000000000000000000029 /* oldos-notes-next.png in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000039 /* oldos-notes-next.png */; };
 		A0000000000000000000002A /* oldos-notes-button-center.png in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000003A /* oldos-notes-button-center.png */; };
+		A0000000000000000000002B /* oldos-notes-back-arrow.png in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000003B /* oldos-notes-back-arrow.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +35,7 @@
 		A00000000000000000000038 /* oldos-notes-previous.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/oldos-notes-previous.png"; sourceTree = "<group>"; };
 		A00000000000000000000039 /* oldos-notes-next.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/oldos-notes-next.png"; sourceTree = "<group>"; };
 		A0000000000000000000003A /* oldos-notes-button-center.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/oldos-notes-button-center.png"; sourceTree = "<group>"; };
+		A0000000000000000000003B /* oldos-notes-back-arrow.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/oldos-notes-back-arrow.png"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -70,6 +72,7 @@
 				A00000000000000000000038 /* oldos-notes-previous.png */,
 				A00000000000000000000039 /* oldos-notes-next.png */,
 				A0000000000000000000003A /* oldos-notes-button-center.png */,
+				A0000000000000000000003B /* oldos-notes-back-arrow.png */,
 			);
 			path = HelloIPA;
 			sourceTree = "<group>";
@@ -150,6 +153,7 @@
 				A00000000000000000000028 /* oldos-notes-previous.png in Resources */,
 				A00000000000000000000029 /* oldos-notes-next.png in Resources */,
 				A0000000000000000000002A /* oldos-notes-button-center.png in Resources */,
+				A0000000000000000000002B /* oldos-notes-back-arrow.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

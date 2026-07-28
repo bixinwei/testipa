@@ -108,6 +108,17 @@ struct OldOSHeaderControl: View {
                 }
             }
 
+            if includesBackCap, let arrow = oldOSImage(named: "oldos-notes-back-arrow") {
+                HStack {
+                    arrow
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 13, height: 13)
+                        .padding(.leading, 7)
+                    Spacer(minLength: 0)
+                }
+            }
+
             if let title = title {
                 Text(title)
                     .font(.system(size: 16, weight: .semibold))
@@ -1156,13 +1167,18 @@ struct NotesListView: View {
                         .scaledToFill()
                         .clipped()
                 }
-                ScrollView {
-                    VStack(spacing: 1) {
+                GeometryReader { geometry in
+                    ScrollView {
+                        VStack(spacing: 1) {
                         ForEach(viewModel.notes) { note in
                             Button(action: { viewModel.select(note) }) {
                                 HStack(spacing: 12) {
-                                        Text(note.title).font(.custom("MarkerFelt-Thin", size: 16)).lineLimit(1).truncationMode(.tail)
-                                        Spacer(minLength: 8)
+                                        Text(note.title)
+                                            .font(.custom("MarkerFelt-Thin", size: 16))
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .layoutPriority(1)
                                         Text(dateFormatter.string(from: note.modifiedAt)).font(.system(size: 17)).foregroundColor(.gray).fixedSize()
                                         Image(systemName: "chevron.right").font(.system(size: 22, weight: .bold)).foregroundColor(Color.retroLeatherDark.opacity(0.7))
                                 }
@@ -1171,10 +1187,12 @@ struct NotesListView: View {
                                 .background(Color.retroPaper)
                                 .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
                             }
+                            .buttonStyle(PlainButtonStyle())
                         }
                     }
+                    .frame(width: geometry.size.width, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }.background(Color.black).edgesIgnoringSafeArea(.all)
@@ -1229,16 +1247,18 @@ struct ContentView: View {
                 }
                 StableTextEditor(text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 })).padding(.leading, 40).padding(.top, 70)
             }
-            HStack(spacing: 18) {
-                toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
-                toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
-                toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
-                toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
+            ZStack {
+                RuledPaperBackground()
+                HStack(spacing: 18) {
+                    toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
+                    toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
+                    toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
+                    toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
+                }
+                .padding(.top, 8)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
-            .padding(.top, 8)
-            .frame(maxWidth: .infinity, alignment: .top)
             .frame(height: 140)
-            .background(Color.retroPaper)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).edgesIgnoringSafeArea(.all)
     }
 
