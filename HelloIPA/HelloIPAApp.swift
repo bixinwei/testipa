@@ -78,10 +78,6 @@ struct RetroTitleBar<Trailing: View>: View {
         self.trailing = trailing
     }
 
-    private var topSafeAreaInset: CGFloat {
-        UIApplication.shared.windows.first(where: { $0.isKeyWindow })?.safeAreaInsets.top ?? 0
-    }
-
     var body: some View {
         ZStack {
             LinearGradient(
@@ -121,14 +117,6 @@ struct RetroTitleBar<Trailing: View>: View {
             }
         }
         .frame(height: 52)
-        .padding(.top, topSafeAreaInset)
-        .background(
-            LinearGradient(
-                colors: [Color.retroLeatherLight, Color.retroLeatherDark],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
     }
 }
 
@@ -871,6 +859,7 @@ final class AppViewModel: ObservableObject {
 
     var canMovePrevious: Bool { (notes.firstIndex { $0.id == selectedNoteID } ?? 0) > 0 }
     var canMoveNext: Bool { (notes.firstIndex { $0.id == selectedNoteID } ?? notes.count - 1) < notes.count - 1 }
+    var currentNote: Note { notes.first(where: { $0.id == selectedNoteID }) ?? notes[0] }
 
     private func updateSelectedNote() {
         guard let index = notes.firstIndex(where: { $0.id == selectedNoteID }) else { return }
@@ -1006,46 +995,44 @@ struct ShareAddressSheet: View {
 
 struct NotesListView: View {
     @ObservedObject var viewModel: AppViewModel
-    private let dateFormatter: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = "M月d日 HH:mm"; return f }()
+    private let dateFormatter: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US"); f.dateFormat = "M/d/yy"; return f }()
 
     var body: some View {
         VStack(spacing: 0) {
-            RetroTitleBar(title: "备忘录") {
+            RetroTitleBar(title: "Notes (\(viewModel.notes.count))") {
                 Button(action: viewModel.createNote) { Image(systemName: "plus").frame(width: 42, height: 30) }
-                    .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.12, green: 0.34, blue: 0.67), fontSize: 18))
+                    .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color.retroLeatherDark, fontSize: 24))
             }
             ZStack {
-                Color.retroWoodDark
+                Color.retroPaper
                 ScrollView {
                     VStack(spacing: 1) {
                         ForEach(viewModel.notes) { note in
                             Button(action: { viewModel.select(note) }) {
-                                VStack(alignment: .leading, spacing: 5) {
-                                    HStack {
-                                        Text(note.title).font(.system(size: 19, weight: .bold)).lineLimit(1).truncationMode(.tail)
+                                HStack(spacing: 12) {
+                                        Text(note.title).font(.custom("MarkerFelt-Thin", size: 25)).lineLimit(1).truncationMode(.tail)
                                         Spacer(minLength: 8)
-                                        Text(dateFormatter.string(from: note.modifiedAt)).font(.caption).fixedSize()
-                                    }
-                                    Text(note.preview).font(.system(size: 14)).lineLimit(1)
+                                        Text(dateFormatter.string(from: note.modifiedAt)).font(.system(size: 17)).foregroundColor(.gray).fixedSize()
+                                        Image(systemName: "chevron.right").font(.system(size: 22, weight: .bold)).foregroundColor(Color.retroLeatherDark.opacity(0.7))
                                 }
-                                .foregroundColor(Color.retroWoodDark).padding(.vertical, 14).padding(.horizontal, 18)
+                                .foregroundColor(Color.retroLeatherDark).padding(.vertical, 17).padding(.horizontal, 18)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(Color.retroPaper)
+                                .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
                             }
                         }
                     }
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.black.opacity(0.65), lineWidth: 2))
-                    .padding(12)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.edgesIgnoringSafeArea(.all)
+        }.background(Color.black).edgesIgnoringSafeArea(.bottom)
     }
 }
 
 struct ContentView: View {
     @ObservedObject var viewModel: AppViewModel
+    @State private var showingDeleteConfirmation = false
 
     var body: some View {
         ZStack {
@@ -1055,42 +1042,55 @@ struct ContentView: View {
         .onAppear { viewModel.server.updateSharedText(viewModel.text) }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in viewModel.persistText() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in viewModel.persistText() }
+        .actionSheet(isPresented: $showingDeleteConfirmation) {
+            ActionSheet(title: Text("Delete Note?"), buttons: [
+                .destructive(Text("Delete Note"), action: viewModel.deleteSelectedNote),
+                .cancel(Text("Cancel"))
+            ])
+        }
     }
 
     private var editor: some View {
         VStack(spacing: 0) {
-            RetroTitleBar(title: "备忘录") {
+            RetroTitleBar(title: viewModel.currentNote.title) {
                 HStack(spacing: 8) {
-                    Button(action: { viewModel.showingList = true }) { Text("备忘录").frame(height: 30).padding(.horizontal, 7) }
-                        .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.12, green: 0.34, blue: 0.67), fontSize: 13))
+                    Button(action: { viewModel.showingList = true }) { Text("Notes").frame(height: 30).padding(.horizontal, 7) }
+                        .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color.retroLeatherDark, fontSize: 16))
                     Button(action: viewModel.createNote) { Image(systemName: "plus").frame(width: 34, height: 30) }
-                        .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.12, green: 0.34, blue: 0.67), fontSize: 15))
+                        .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color.retroLeatherDark, fontSize: 18))
                 }
             }
             ZStack {
-                Color.retroWoodDark
-                RuledPaperBackground().clipShape(RoundedRectangle(cornerRadius: 6)).overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.62), lineWidth: 2)).padding(12)
-                StableTextEditor(text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 })).padding(.leading, 41).padding(12)
+                RuledPaperBackground()
+                VStack {
+                    HStack { Text("Today").font(.system(size: 18, weight: .bold)); Spacer(); Text(editorDate).font(.system(size: 18)) }
+                        .foregroundColor(Color.retroLeatherLight).padding(.horizontal, 34).padding(.top, 14)
+                    Spacer()
+                }
+                StableTextEditor(text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 })).padding(.leading, 40).padding(.top, 70)
             }
             HStack(spacing: 18) {
-                toolButton("chevron.left", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
-                toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
-                toolButton("trash", enabled: true) { viewModel.deleteSelectedNote() }
-                toolButton("chevron.right", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
-            }.frame(height: 62).frame(maxWidth: .infinity).background(Color.retroLeatherDark)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity).edgesIgnoringSafeArea(.all)
+                toolButton("arrow.uturn.left", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
+                toolButton("envelope", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
+                toolButton("trash", enabled: true) { showingDeleteConfirmation = true }
+                toolButton("arrow.uturn.right", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
+            }.frame(height: 66).frame(maxWidth: .infinity).background(Color.retroPaper)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).edgesIgnoringSafeArea(.bottom)
     }
 
     private func toolButton(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: icon).font(.system(size: 21, weight: .bold)).frame(width: 48, height: 38) }
-            .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.42, green: 0.28, blue: 0.18), fontSize: 16)).disabled(!enabled).opacity(enabled ? 1 : 0.35)
+        Button(action: action) { Image(systemName: icon).font(.system(size: 23, weight: .regular)).frame(width: 52, height: 44) }
+            .foregroundColor(Color.retroLeatherLight).buttonStyle(PlainButtonStyle()).disabled(!enabled).opacity(enabled ? 1 : 0.35)
     }
+
+    private var editorDate: String { let f = DateFormatter(); f.locale = Locale(identifier: "en_US"); f.dateFormat = "MMM d  HH:mm"; return f.string(from: viewModel.currentNote.modifiedAt) }
 }
 
 /// Keeps the note surface continuous at the screen edges, without system white bars.
 final class ImmersiveHostingController<Content: View>: UIHostingController<Content> {
-    override var prefersStatusBarHidden: Bool { true }
-    override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var prefersStatusBarHidden: Bool { false }
+    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+    override var prefersHomeIndicatorAutoHidden: Bool { false }
     override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .bottom }
 
     override func viewDidAppear(_ animated: Bool) {
