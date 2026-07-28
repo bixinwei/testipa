@@ -1116,7 +1116,7 @@ struct ContentView: View {
             }
             HStack(spacing: 18) {
                 toolButton("arrow.uturn.left", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
-                toolButton("envelope", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
+                toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
                 toolButton("trash", enabled: true) { showingDeleteConfirmation = true }
                 toolButton("arrow.uturn.right", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
             }.frame(height: 140).frame(maxWidth: .infinity).background(Color.retroPaper)
