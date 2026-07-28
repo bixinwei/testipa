@@ -160,6 +160,27 @@ struct ActivityIndicator: UIViewRepresentable {
 struct StableTextEditor: UIViewRepresentable {
     @Binding var text: String
 
+    private static let noteFont = UIFont(name: "PingFangSC-Regular", size: 18) ?? .systemFont(ofSize: 18)
+    private static let noteTextColor = UIColor(red: 0.16, green: 0.10, blue: 0.06, alpha: 1)
+    private static let noteLineHeight: CGFloat = 26
+
+    private static func noteAttributes() -> [NSAttributedString.Key: Any] {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.minimumLineHeight = noteLineHeight
+        paragraphStyle.maximumLineHeight = noteLineHeight
+        paragraphStyle.lineBreakMode = .byWordWrapping
+
+        return [
+            .font: noteFont,
+            .foregroundColor: noteTextColor,
+            .paragraphStyle: paragraphStyle
+        ]
+    }
+
+    private static func styledText(_ value: String) -> NSAttributedString {
+        NSAttributedString(string: value, attributes: noteAttributes())
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text)
     }
@@ -168,17 +189,19 @@ struct StableTextEditor: UIViewRepresentable {
         let textView = UITextView()
         textView.delegate = context.coordinator
         textView.backgroundColor = .clear
-        textView.textColor = UIColor(red: 0.16, green: 0.10, blue: 0.06, alpha: 1)
-        textView.font = UIFont(name: "MarkerFelt-Thin", size: 19) ?? .systemFont(ofSize: 18)
+        textView.textColor = Self.noteTextColor
+        textView.font = Self.noteFont
+        textView.typingAttributes = Self.noteAttributes()
         textView.keyboardDismissMode = .interactive
         textView.alwaysBounceVertical = true
         textView.contentInset = .zero
         textView.scrollIndicatorInsets = .zero
-        textView.textContainerInset = UIEdgeInsets(top: 14, left: 10, bottom: 14, right: 10)
+        // The first baseline sits just above the first ruled line (at y = 30).
+        textView.textContainerInset = UIEdgeInsets(top: 7, left: 10, bottom: 14, right: 10)
         textView.textContainer.lineFragmentPadding = 0
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
-        textView.text = text
+        textView.attributedText = Self.styledText(text)
         return textView
     }
 
@@ -186,7 +209,8 @@ struct StableTextEditor: UIViewRepresentable {
         guard textView.text != text else { return }
 
         let selectedRange = textView.selectedRange
-        textView.text = text
+        textView.attributedText = Self.styledText(text)
+        textView.typingAttributes = Self.noteAttributes()
         let clampedLocation = min(selectedRange.location, (textView.text as NSString).length)
         textView.selectedRange = NSRange(location: clampedLocation, length: 0)
     }
