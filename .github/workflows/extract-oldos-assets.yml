@@ -1,0 +1,26 @@
+name: Extract OldOS Notes Assets
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract compiled asset catalog
+        run: |
+          unzip -p OldOS.ipa Payload/OldOS.app/Assets.car > /tmp/Assets.car
+          brew tap 0xxd0/tap
+          brew install cartool
+          mkdir -p oldos-assets
+          cartool /tmp/Assets.car oldos-assets
+          find oldos-assets -type f \( -iname '*notes*' -o -iname '*buttonbar*' -o -iname '*navigationbar*' \) -print
+
+      - name: Upload extracted Notes resources
+        uses: actions/upload-artifact@v4
+        with:
+          name: oldos-notes-assets
+          path: oldos-assets
+          if-no-files-found: error
