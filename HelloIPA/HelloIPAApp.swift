@@ -255,7 +255,8 @@ struct StableTextEditor: UIViewRepresentable {
     @Binding var text: String
     @Binding var scrollOffset: CGFloat
 
-    private static let noteFont = UIFont(name: "PingFangSC-Regular", size: 18) ?? .systemFont(ofSize: 18)
+    // Match the handwritten face used for each title in the Notes list.
+    private static let noteFont = UIFont(name: "MarkerFelt-Thin", size: 16) ?? .systemFont(ofSize: 16)
     private static let noteTextColor = UIColor(red: 0.16, green: 0.10, blue: 0.06, alpha: 1)
     private static let noteLineHeight: CGFloat = 26
 
@@ -1246,8 +1247,8 @@ struct ContentView: View {
                     .padding(.top, 42)
                     .padding(.bottom, 92)
 
-                Text(editorDate)
-                    .font(.system(size: 15, weight: .medium))
+                Text("Today  \(editorDate)")
+                    .font(.custom("MarkerFelt-Thin", size: 16))
                     .foregroundColor(Color.retroLeatherLight.opacity(0.72))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(.leading, 40)
