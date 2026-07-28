@@ -13,6 +13,7 @@ jobs:
         run: |
           unzip -p OldOS.ipa Payload/OldOS.app/Assets.car > /tmp/Assets.car
           brew tap 0xxd0/tap
+          brew trust --formula 0xxd0/tap/cartool
           brew install cartool
           mkdir -p oldos-assets
           cartool /tmp/Assets.car oldos-assets
