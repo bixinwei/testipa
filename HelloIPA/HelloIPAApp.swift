@@ -78,6 +78,10 @@ struct RetroTitleBar<Trailing: View>: View {
         self.trailing = trailing
     }
 
+    private var topSafeAreaInset: CGFloat {
+        UIApplication.shared.windows.first(where: { $0.isKeyWindow })?.safeAreaInsets.top ?? 0
+    }
+
     var body: some View {
         ZStack {
             LinearGradient(
@@ -117,6 +121,14 @@ struct RetroTitleBar<Trailing: View>: View {
             }
         }
         .frame(height: 52)
+        .padding(.top, topSafeAreaInset)
+        .background(
+            LinearGradient(
+                colors: [Color.retroLeatherLight, Color.retroLeatherDark],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
     }
 }
 
@@ -1009,7 +1021,11 @@ struct NotesListView: View {
                         ForEach(viewModel.notes) { note in
                             Button(action: { viewModel.select(note) }) {
                                 VStack(alignment: .leading, spacing: 5) {
-                                    HStack { Text(note.title).font(.system(size: 19, weight: .bold)); Spacer(); Text(dateFormatter.string(from: note.modifiedAt)).font(.caption) }
+                                    HStack {
+                                        Text(note.title).font(.system(size: 19, weight: .bold)).lineLimit(1).truncationMode(.tail)
+                                        Spacer(minLength: 8)
+                                        Text(dateFormatter.string(from: note.modifiedAt)).font(.caption).fixedSize()
+                                    }
                                     Text(note.preview).font(.system(size: 14)).lineLimit(1)
                                 }
                                 .foregroundColor(Color.retroWoodDark).padding(.vertical, 14).padding(.horizontal, 18)
@@ -1021,7 +1037,9 @@ struct NotesListView: View {
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.black.opacity(0.65), lineWidth: 2))
                     .padding(12)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }.edgesIgnoringSafeArea(.all)
     }
 }
@@ -1060,7 +1078,7 @@ struct ContentView: View {
                 toolButton("trash", enabled: true) { viewModel.deleteSelectedNote() }
                 toolButton("chevron.right", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
             }.frame(height: 62).frame(maxWidth: .infinity).background(Color.retroLeatherDark)
-        }.edgesIgnoringSafeArea(.all)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).edgesIgnoringSafeArea(.all)
     }
 
     private func toolButton(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
