@@ -192,7 +192,18 @@ struct StableTextEditor: UIViewRepresentable {
     }
 
     private static func styledText(_ value: String) -> NSAttributedString {
-        NSAttributedString(string: value, attributes: noteAttributes())
+        let styled = NSMutableAttributedString(string: value, attributes: noteAttributes())
+        let fullRange = NSRange(value.startIndex..., in: value)
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        detector?.enumerateMatches(in: value, options: [], range: fullRange) { match, _, _ in
+            guard let match = match, let url = match.url else { return }
+            styled.addAttributes([
+                .link: url,
+                .foregroundColor: UIColor.systemBlue,
+                .underlineStyle: NSUnderlineStyle.single.rawValue
+            ], range: match.range)
+        }
+        return styled
     }
 
     func makeCoordinator() -> Coordinator {
@@ -206,6 +217,7 @@ struct StableTextEditor: UIViewRepresentable {
         textView.textColor = Self.noteTextColor
         textView.font = Self.noteFont
         textView.typingAttributes = Self.noteAttributes()
+        textView.isSelectable = true
         textView.keyboardDismissMode = .interactive
         textView.alwaysBounceVertical = true
         textView.contentInset = .zero
@@ -238,6 +250,21 @@ struct StableTextEditor: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             text = textView.text
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            let selectedRange = textView.selectedRange
+            textView.attributedText = StableTextEditor.styledText(textView.text)
+            textView.typingAttributes = StableTextEditor.noteAttributes()
+            textView.selectedRange = selectedRange
+        }
+
+        func textView(_ textView: UITextView,
+                      shouldInteractWith URL: URL,
+                      in characterRange: NSRange,
+                      interaction: UITextItemInteraction) -> Bool {
+            UIApplication.shared.open(URL)
+            return false
         }
     }
 }
@@ -1023,12 +1050,12 @@ struct NotesListView: View {
                         ForEach(viewModel.notes) { note in
                             Button(action: { viewModel.select(note) }) {
                                 HStack(spacing: 12) {
-                                        Text(note.title).font(.custom("MarkerFelt-Thin", size: 20)).lineLimit(1).truncationMode(.tail)
+                                        Text(note.title).font(.custom("MarkerFelt-Thin", size: 16)).lineLimit(1).truncationMode(.tail)
                                         Spacer(minLength: 8)
                                         Text(dateFormatter.string(from: note.modifiedAt)).font(.system(size: 17)).foregroundColor(.gray).fixedSize()
                                         Image(systemName: "chevron.right").font(.system(size: 22, weight: .bold)).foregroundColor(Color.retroLeatherDark.opacity(0.7))
                                 }
-                                .foregroundColor(Color.retroLeatherDark).padding(.vertical, 13).padding(.horizontal, 18)
+                                .foregroundColor(Color.retroLeatherDark).padding(.vertical, 10).padding(.horizontal, 18)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(Color.retroPaper)
                                 .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
@@ -1092,7 +1119,7 @@ struct ContentView: View {
                 toolButton("envelope", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
                 toolButton("trash", enabled: true) { showingDeleteConfirmation = true }
                 toolButton("arrow.uturn.right", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
-            }.frame(height: 90).frame(maxWidth: .infinity).background(Color.retroPaper)
+            }.frame(height: 140).frame(maxWidth: .infinity).background(Color.retroPaper)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).edgesIgnoringSafeArea(.all)
     }
 
