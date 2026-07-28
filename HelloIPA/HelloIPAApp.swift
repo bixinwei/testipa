@@ -148,10 +148,6 @@ struct RetroTitleBar<Trailing: View>: View {
         self.trailing = trailing
     }
 
-    // The status-area query can change during a SwiftUI view transition, which
-    // made the list and editor title bars different heights on the same phone.
-    private let topSafeAreaInset: CGFloat = 44
-
     /// Classic Notes only had room for a short, centered title.  Do the truncation
     /// deliberately so long Chinese titles behave the same as long Latin titles.
     private var displayTitle: String {
@@ -212,7 +208,6 @@ struct RetroTitleBar<Trailing: View>: View {
                 .padding(.trailing, 14)
         }
         .frame(height: 52)
-        .padding(.top, topSafeAreaInset)
         .background(
             LinearGradient(
                 colors: [Color.retroLeatherLight, Color.retroLeatherDark],
@@ -1125,7 +1120,7 @@ struct ShareAddressSheet: View {
                 }
             }
         }
-        .edgesIgnoringSafeArea(.all)
+        .edgesIgnoringSafeArea(.bottom)
     }
 
     private func copyAddress() {
@@ -1185,9 +1180,10 @@ struct NotesListView: View {
                                             .foregroundColor(Color.retroLeatherDark.opacity(0.7))
                                             .layoutPriority(1)
                                 }
-                                .foregroundColor(Color.retroLeatherDark).padding(.vertical, 10).padding(.horizontal, 18)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.retroPaper)
+                                .foregroundColor(Color.retroLeatherDark)
+                                .padding(.vertical, 10)
+                                .padding(.horizontal, 18)
+                                .frame(width: geometry.size.width, alignment: .leading)
                                 .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
                             }
                             .buttonStyle(PlainButtonStyle())
@@ -1198,7 +1194,9 @@ struct NotesListView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.background(Color.black).edgesIgnoringSafeArea(.all)
+        }
+        .background(Color.black.edgesIgnoringSafeArea(.top))
+        .edgesIgnoringSafeArea(.bottom)
     }
 }
 
@@ -1263,7 +1261,10 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).edgesIgnoringSafeArea(.all)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.edgesIgnoringSafeArea(.top))
+        .edgesIgnoringSafeArea(.bottom)
     }
 
     private func toolButton(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
