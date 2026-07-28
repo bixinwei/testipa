@@ -31,7 +31,8 @@ private extension Color {
 /// asset catalog. Resolve the concrete file path on device.
 private func oldOSImage(named name: String) -> Image? {
     guard let path = Bundle.main.path(forResource: name, ofType: "png"),
-          let image = UIImage(contentsOfFile: path) else {
+          let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+          let image = UIImage(data: data, scale: 2) else {
         return nil
     }
     return Image(uiImage: image)
@@ -92,7 +93,7 @@ struct OldOSHeaderControl: View {
             if let buttonCenter = oldOSImage(named: "oldos-notes-button-center") {
                 buttonCenter
                     .resizable(
-                        capInsets: EdgeInsets(top: 16, leading: 3, bottom: 16, trailing: 3),
+                        capInsets: EdgeInsets(top: 10, leading: 5, bottom: 10, trailing: 5),
                         resizingMode: .stretch
                     )
             }
@@ -101,26 +102,18 @@ struct OldOSHeaderControl: View {
                 HStack(spacing: 0) {
                     if let backCap = oldOSImage(named: "oldos-notes-back") {
                         backCap
-                            .resizable()
-                            .frame(width: 19)
+                            .frame(width: 19, height: 30)
                     }
                     Spacer(minLength: 0)
                 }
             }
 
             if let title = title {
-                HStack(spacing: 4) {
-                    if includesBackCap, let arrow = oldOSImage(named: "oldos-notes-back-arrow") {
-                        arrow
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 11, height: 12)
-                    }
-                    Text(title)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                        .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
-                }
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                    .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
+                    .padding(.leading, includesBackCap ? 9 : 0)
             }
 
             if let iconName = iconName {
@@ -129,10 +122,11 @@ struct OldOSHeaderControl: View {
                         .renderingMode(.original)
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 25, height: 27)
+                        .frame(width: 16, height: 17)
                 }
             }
         }
+        .frame(height: 30)
     }
 }
 
@@ -1142,28 +1136,30 @@ struct NotesListView: View {
     private let dateFormatter: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US"); f.dateFormat = "M/d/yy"; return f }()
 
     var body: some View {
-        VStack(spacing: 0) {
-            RetroTitleBar(title: "Notes (\(viewModel.notes.count))") {
-                Button(action: viewModel.createNote) {
-                    OldOSHeaderControl(title: nil, iconName: "oldos-toolbar-plus")
-                        .frame(width: 50, height: 32)
+        GeometryReader { screen in
+            VStack(spacing: 0) {
+                RetroTitleBar(title: "Notes (\(viewModel.notes.count))") {
+                    Button(action: viewModel.createNote) {
+                        OldOSHeaderControl(title: nil, iconName: "oldos-toolbar-plus")
+                            .frame(width: 44, height: 30)
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
-                .buttonStyle(PlainButtonStyle())
-            }
-            ZStack {
-                Color.retroPaper
-                if let paper = oldOSImage(named: "oldos-notes-body") {
-                    paper
-                        .resizable()
-                        .scaledToFill()
-                        .clipped()
-                }
-                GeometryReader { geometry in
+                .frame(width: screen.size.width)
+
+                ZStack {
+                    Color.retroPaper
+                    if let paper = oldOSImage(named: "oldos-notes-body") {
+                        paper
+                            .resizable()
+                            .scaledToFill()
+                            .clipped()
+                    }
                     ScrollView {
                         VStack(spacing: 1) {
-                        ForEach(viewModel.notes) { note in
-                            Button(action: { viewModel.select(note) }) {
-                                HStack(spacing: 12) {
+                            ForEach(viewModel.notes) { note in
+                                Button(action: { viewModel.select(note) }) {
+                                    HStack(spacing: 12) {
                                         Text(note.title)
                                             .font(.custom("MarkerFelt-Thin", size: 16))
                                             .lineLimit(1)
@@ -1179,21 +1175,24 @@ struct NotesListView: View {
                                             .font(.system(size: 22, weight: .bold))
                                             .foregroundColor(Color.retroLeatherDark.opacity(0.7))
                                             .layoutPriority(1)
+                                    }
+                                    .foregroundColor(Color.retroLeatherDark)
+                                    .padding(.vertical, 10)
+                                    .padding(.horizontal, 18)
+                                    .frame(width: screen.size.width, alignment: .leading)
+                                    .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
                                 }
-                                .foregroundColor(Color.retroLeatherDark)
-                                .padding(.vertical, 10)
-                                .padding(.horizontal, 18)
-                                .frame(width: geometry.size.width, alignment: .leading)
-                                .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
+                                .buttonStyle(PlainButtonStyle())
                             }
-                            .buttonStyle(PlainButtonStyle())
                         }
+                        .frame(width: screen.size.width, alignment: .leading)
                     }
-                    .frame(width: geometry.size.width, alignment: .leading)
                 }
-                }
+                .frame(width: screen.size.width)
+                .frame(maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(width: screen.size.width, height: screen.size.height)
+            .clipped()
         }
         .background(Color.black.edgesIgnoringSafeArea(.top))
         .edgesIgnoringSafeArea(.bottom)
@@ -1225,14 +1224,14 @@ struct ContentView: View {
             RetroTitleBar(title: viewModel.currentNote.title, truncatesTitle: true) {
                 Button(action: viewModel.createNote) {
                     OldOSHeaderControl(title: nil, iconName: "oldos-toolbar-plus")
-                        .frame(width: 50, height: 32)
+                        .frame(width: 44, height: 30)
                 }
                 .buttonStyle(PlainButtonStyle())
             }
             .overlay(
                 Button(action: { viewModel.showingList = true }) {
                     OldOSHeaderControl(title: "Notes", iconName: nil, includesBackCap: true)
-                    .frame(width: 76, height: 32)
+                    .frame(width: 70, height: 30)
                 }
                 .buttonStyle(PlainButtonStyle())
                 .padding(.leading, 14)
