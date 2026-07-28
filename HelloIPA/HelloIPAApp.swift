@@ -916,6 +916,7 @@ struct ContentView: View {
             }
             .navigationBarHidden(true)
         }
+        .edgesIgnoringSafeArea(.all)
         .onAppear {
             viewModel.server.updateSharedText(viewModel.text)
         }
@@ -942,6 +943,20 @@ struct ContentView: View {
     }
 }
 
+/// Keeps the note surface continuous at the screen edges, without system white bars.
+final class ImmersiveHostingController<Content: View>: UIHostingController<Content> {
+    override var prefersStatusBarHidden: Bool { true }
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .bottom }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        setNeedsStatusBarAppearanceUpdate()
+        setNeedsUpdateOfHomeIndicatorAutoHidden()
+        setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+    }
+}
+
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
     private let viewModel = AppViewModel()
@@ -952,7 +967,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else { return }
 
         let window = UIWindow(windowScene: windowScene)
-        window.rootViewController = UIHostingController(rootView: ContentView(viewModel: viewModel))
+        window.rootViewController = ImmersiveHostingController(rootView: ContentView(viewModel: viewModel))
         self.window = window
         window.makeKeyAndVisible()
     }
