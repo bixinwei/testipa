@@ -44,7 +44,7 @@ function startServer(noteId) {
 function stopServer() { if (shareServer) shareServer.close(); shareServer = undefined; sharePort = undefined; }
 
 function createWindow() {
-  windowRef = new BrowserWindow({ width: 460, height: 860, minWidth: 360, minHeight: 600, backgroundColor: '#000', webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
+  windowRef = new BrowserWindow({ width: 460, height: 860, minWidth: 360, minHeight: 600, frame: false, autoHideMenuBar: true, backgroundColor: '#000', webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
   windowRef.loadFile(path.join(__dirname, 'renderer.html'));
   windowRef.on('closed', () => { stopServer(); windowRef = undefined; });
 }

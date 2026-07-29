@@ -25,4 +25,6 @@ npm start
 
 已生成便携版：`HelloIPAWindows.exe`（项目上级目录也有一份）。双击 EXE 即可运行，不需要打开 HTML，也不需要安装 Node.js。
 
+`ffmpeg.dll` 是 Electron/Chromium 的固定运行时组件，即使本应用不播放音视频也需要它；请保持它和 EXE 位于同一目录。
+
 Windows 安装包可在此基础上接入 electron-builder；本项目不改变原 iOS 工程和素材源文件。
