@@ -4,7 +4,6 @@ import Foundation
 import Darwin
 import UIKit
 import Combine
-import CoreImage
 
 enum AppDefaults {
     static let savedTextKey = "helloipa.savedText"
@@ -43,27 +42,38 @@ private func oldOSImage(named name: String) -> Image? {
     return Image(uiImage: image)
 }
 
-/// The source artwork already contains the pointed leading cap and rounded
-/// trailing end in one bitmap. Preserve that one-piece silhouette with
-/// cap-inset resizing rather than composing two separate image slices.
+/// OldOS Notes provides a pointed left cap and a stretchable center as alpha
+/// masks, plus the brown leather top-bar artwork. Paint the *same* leather
+/// texture through their union so the finished control is one continuous
+/// material rather than two visibly joined controls.
 private func oldOSNotesButtonBackground() -> Image? {
-    guard let source = oldOSUIImage(named: "oldos-notes-back-button"),
-          let input = CIImage(image: source) else { return nil }
+    guard let cap = oldOSUIImage(named: "oldos-notes-back"),
+          let center = oldOSUIImage(named: "oldos-notes-button-center"),
+          let leather = oldOSUIImage(named: "oldos-notes-topbar"),
+          let capMask = cap.cgImage,
+          let centerMask = center.cgImage else { return nil }
 
-    // The complete OldOS back-button artwork supplies the shape and gloss. Its
-    // neutral gray material is mapped into the warm brown range sampled from
-    // the original Notes toolbar, while retaining its luminance detail.
-    let colorMatrix = CIFilter(name: "CIColorMatrix")
-    colorMatrix?.setValue(input, forKey: kCIInputImageKey)
-    colorMatrix?.setValue(CIVector(x: 0.52, y: 0.52, z: 0.52, w: 0), forKey: "inputRVector")
-    colorMatrix?.setValue(CIVector(x: 0.40, y: 0.40, z: 0.40, w: 0), forKey: "inputGVector")
-    colorMatrix?.setValue(CIVector(x: 0.32, y: 0.32, z: 0.32, w: 0), forKey: "inputBVector")
-    colorMatrix?.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
-    colorMatrix?.setValue(CIVector(x: 0.15, y: 0.10, z: 0.10, w: 0), forKey: "inputBiasVector")
+    let size = CGSize(width: 62, height: 30)
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 2
+    format.opaque = false
+    let composite = UIGraphicsImageRenderer(size: size, format: format).image { rendererContext in
+        let context = rendererContext.cgContext
+        let capRect = CGRect(x: 0, y: 0, width: cap.size.width, height: size.height)
+        let centerRect = CGRect(x: cap.size.width - 5, y: 0, width: size.width - cap.size.width + 5, height: size.height)
+        let leatherOrigin = CGPoint(x: -32, y: -7)
 
-    guard let output = colorMatrix?.outputImage,
-          let image = CIContext().createCGImage(output, from: output.extent) else { return nil }
-    return Image(uiImage: UIImage(cgImage: image, scale: source.scale, orientation: source.imageOrientation))
+        context.saveGState()
+        context.clip(to: capRect, mask: capMask)
+        leather.draw(at: leatherOrigin)
+        context.restoreGState()
+
+        context.saveGState()
+        context.clip(to: centerRect, mask: centerMask)
+        leather.draw(at: leatherOrigin)
+        context.restoreGState()
+    }
+    return Image(uiImage: composite)
 }
 
 /// Glossy capsule button in the style of pre-iOS7 default UIButtons: top highlight sheen + bevel border.
@@ -121,7 +131,7 @@ struct OldOSHeaderControl: View {
                     if let background = oldOSNotesButtonBackground() {
                         background
                             .resizable(
-                                capInsets: EdgeInsets(top: 8, leading: 26, bottom: 8, trailing: 10),
+                                capInsets: EdgeInsets(top: 10, leading: 19, bottom: 10, trailing: 5),
                                 resizingMode: .stretch
                             )
                     }
