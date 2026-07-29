@@ -4,6 +4,7 @@ import Foundation
 import Darwin
 import UIKit
 import Combine
+import CoreImage
 
 enum AppDefaults {
     static let savedTextKey = "helloipa.savedText"
@@ -46,7 +47,23 @@ private func oldOSImage(named name: String) -> Image? {
 /// trailing end in one bitmap. Preserve that one-piece silhouette with
 /// cap-inset resizing rather than composing two separate image slices.
 private func oldOSNotesButtonBackground() -> Image? {
-    oldOSImage(named: "oldos-notes-back-button")
+    guard let source = oldOSUIImage(named: "oldos-notes-back-button"),
+          let input = CIImage(image: source) else { return nil }
+
+    // The complete OldOS back-button artwork supplies the shape and gloss. Its
+    // neutral gray material is mapped into the warm brown range sampled from
+    // the original Notes toolbar, while retaining its luminance detail.
+    let colorMatrix = CIFilter(name: "CIColorMatrix")
+    colorMatrix?.setValue(input, forKey: kCIInputImageKey)
+    colorMatrix?.setValue(CIVector(x: 0.52, y: 0.52, z: 0.52, w: 0), forKey: "inputRVector")
+    colorMatrix?.setValue(CIVector(x: 0.40, y: 0.40, z: 0.40, w: 0), forKey: "inputGVector")
+    colorMatrix?.setValue(CIVector(x: 0.32, y: 0.32, z: 0.32, w: 0), forKey: "inputBVector")
+    colorMatrix?.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
+    colorMatrix?.setValue(CIVector(x: 0.15, y: 0.10, z: 0.10, w: 0), forKey: "inputBiasVector")
+
+    guard let output = colorMatrix?.outputImage,
+          let image = CIContext().createCGImage(output, from: output.extent) else { return nil }
+    return Image(uiImage: UIImage(cgImage: image, scale: source.scale, orientation: source.imageOrientation))
 }
 
 /// Glossy capsule button in the style of pre-iOS7 default UIButtons: top highlight sheen + bevel border.
