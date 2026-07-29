@@ -1321,6 +1321,9 @@ struct ContentView: View {
                 }
                 ZStack {
                     Color.retroPaper
+                    if let paper = oldOSImage(named: "oldos-notes-body") {
+                        paper.resizable().scaledToFill().clipped()
+                    }
                     StableTextEditor(
                         text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 }),
                         metadata: editorMetadata
@@ -1337,6 +1340,9 @@ struct ContentView: View {
                 // the editor above cannot scroll beneath or be covered by it.
                 ZStack(alignment: .bottom) {
                     Color.retroPaper
+                    if let paper = oldOSImage(named: "oldos-notes-body") {
+                        paper.resizable().scaledToFill().clipped()
+                    }
                     HStack(spacing: 0) {
                         toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
                         Spacer(minLength: 0)
