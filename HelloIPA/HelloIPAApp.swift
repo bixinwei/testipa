@@ -172,7 +172,7 @@ struct RetroTitleBar<Trailing: View>: View {
             }
 
             Text(displayTitle)
-                .font(.custom("Helvetica Neue Bold", size: 16))
+                .font(.custom("Helvetica Neue Bold", size: 22))
                 .foregroundColor(.white)
                 .shadow(color: Color.black.opacity(0.21), radius: 0, x: 0, y: -1)
                 .lineLimit(1)
@@ -259,7 +259,6 @@ struct NoteMetadata: Equatable {
 
 struct NoteMetadataHeader: View {
     let metadata: NoteMetadata
-    private let bodyHorizontalInset = 20 / UIScreen.main.scale
 
     var body: some View {
         HStack {
@@ -270,7 +269,8 @@ struct NoteMetadataHeader: View {
                 .font(.custom("Helvetica Neue Regular", size: 14))
         }
         .foregroundColor(Color(red: 161/255, green: 93/255, blue: 68/255))
-        .padding(.horizontal, bodyHorizontalInset)
+        .padding(.leading, 32)
+        .padding(.trailing, 8)
         .padding(.top, 10)
         .padding(.bottom, 15)
         .background(Color.clear)
@@ -282,6 +282,7 @@ struct NoteMetadataHeader: View {
 /// UITextView, so they stay registered with the glyph baselines while editing.
 final class OldOSLinedTextView: UITextView {
     private let horizontalLineColor = UIColor(red: 78/255, green: 90/255, blue: 130/255, alpha: 0.4)
+    private let verticalLineColor = UIColor(red: 161/255, green: 93/255, blue: 68/255, alpha: 0.45)
 
     override func draw(_ rect: CGRect) {
         super.draw(rect)
@@ -303,11 +304,31 @@ final class OldOSLinedTextView: UITextView {
         }
         context.strokePath()
 
+        // This is the verticalLineColor path from DALinedTextView.m. It is
+        // expressed in the scroll view's content coordinates, so it stays
+        // continuous from the first ruled line through every scroll position.
+        context.beginPath()
+        context.setStrokeColor(verticalLineColor.cgColor)
+        let marginX = bounds.minX + textContainerInset.left - 3 / scale
+        context.move(to: CGPoint(x: marginX, y: bounds.minY))
+        context.addLine(to: CGPoint(x: marginX, y: bounds.minY + bounds.height))
+        context.strokePath()
     }
 
     override var font: UIFont? { didSet { setNeedsDisplay() } }
     override var textContainerInset: UIEdgeInsets { didSet { setNeedsDisplay() } }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // UIKit's text container is independent of the SwiftUI wrapper's
+        // layout proposal. Keep it tied to the actual rendered width so long
+        // text can wrap but can never widen the note surface.
+        textContainer.widthTracksTextView = true
+        let availableWidth = max(0, bounds.width - textContainerInset.left - textContainerInset.right)
+        if textContainer.size.width != availableWidth {
+            textContainer.size = CGSize(width: availableWidth, height: .greatestFiniteMagnitude)
+        }
+    }
 }
 
 struct StableTextEditor: UIViewRepresentable {
@@ -316,7 +337,6 @@ struct StableTextEditor: UIViewRepresentable {
 
     private static let noteFont = UIFont(name: "Noteworthy-Bold", size: 19) ?? .systemFont(ofSize: 19, weight: .bold)
     private static let noteTextColor = UIColor.black
-    private static let bodyHorizontalInset = 20 / UIScreen.main.scale
 
     private static func noteAttributes() -> [NSAttributedString.Key: Any] {
         return [
@@ -347,10 +367,6 @@ struct StableTextEditor: UIViewRepresentable {
     func makeUIView(context: Context) -> OldOSLinedTextView {
         let textView = OldOSLinedTextView()
         textView.delegate = context.coordinator
-        // This is the redraw path used by OldOS's DALinedTextView. UIKit
-        // invalidates the ruled view as its bounds scroll, without forcing a
-        // synchronous full redraw from every scroll callback.
-        textView.contentMode = .redraw
         // A transparent UIKit view must not declare itself opaque. Otherwise the
         // compositor is allowed to substitute a black backing store in Dark Mode.
         textView.isOpaque = false
@@ -367,7 +383,7 @@ struct StableTextEditor: UIViewRepresentable {
         textView.showsHorizontalScrollIndicator = false
         textView.textContainer.widthTracksTextView = true
         textView.textContainer.lineBreakMode = .byWordWrapping
-        textView.textContainerInset = UIEdgeInsets(top: 40, left: Self.bodyHorizontalInset, bottom: 30, right: Self.bodyHorizontalInset)
+        textView.textContainerInset = UIEdgeInsets(top: 40, left: 28, bottom: 30, right: 3)
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
         textView.attributedText = Self.styledText(text)
@@ -426,6 +442,13 @@ struct StableTextEditor: UIViewRepresentable {
             textView.attributedText = StableTextEditor.styledText(textView.text)
             textView.typingAttributes = StableTextEditor.noteAttributes()
             textView.selectedRange = selectedRange
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            // DALinedTextView draws the rules in the scroll view's content
+            // coordinate space. Ask UIKit to redraw whenever that coordinate
+            // space moves, exactly as its original implementation requires.
+            (scrollView as? OldOSLinedTextView)?.setNeedsDisplay()
         }
 
         func textView(_ textView: UITextView,
@@ -1297,7 +1320,6 @@ struct ContentView: View {
 
     private var editor: some View {
         GeometryReader { geometry in
-            let toolbarHeight = toolbarButtonHeight + toolbarBottomInset
             VStack(spacing: 0) {
                 RetroTitleBar(
                     title: viewModel.currentNote.title,
@@ -1316,9 +1338,12 @@ struct ContentView: View {
                     }
                     .buttonStyle(PlainButtonStyle())
                 }
-                ZStack {
+                ZStack(alignment: .bottom) {
                     Color.retroPaper
-                    if let paper = oldOSImage(named: "oldos-notes-body") {
+                    // OldOS uses bodyMarginThin-568h for the editor: unlike
+                    // the list paper, this source image includes its left
+                    // ruled-page margin.
+                    if let paper = oldOSImage(named: "oldos-notes-body-margin") {
                         paper.resizable().scaledToFill().clipped()
                     }
                     StableTextEditor(
@@ -1327,19 +1352,11 @@ struct ContentView: View {
                     )
                     .frame(
                         width: geometry.size.width,
-                        height: max(0, geometry.size.height - 60 - toolbarHeight)
+                        height: max(0, geometry.size.height - 60)
                     )
-                }
-                .frame(width: geometry.size.width, height: max(0, geometry.size.height - 60 - toolbarHeight))
-                .clipped()
 
-                // A separate bottom region reserves screen space for controls;
-                // the editor above cannot scroll beneath or be covered by it.
-                ZStack(alignment: .bottom) {
-                    Color.retroPaper
-                    if let paper = oldOSImage(named: "oldos-notes-body") {
-                        paper.resizable().scaledToFill().clipped()
-                    }
+                    // The user-specified 200 physical-pixel margins are
+                    // converted to points for the active Retina display.
                     HStack(spacing: 0) {
                         toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
                         Spacer(minLength: 0)
@@ -1349,11 +1366,11 @@ struct ContentView: View {
                         Spacer(minLength: 0)
                         toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
                     }
-                    .padding(.horizontal, toolbarHorizontalInset(for: geometry.size.width))
+                    .padding(.horizontal, physical200PixelInset)
                     .frame(maxWidth: .infinity)
-                    .padding(.bottom, toolbarBottomInset)
+                    .padding(.bottom, physical200PixelInset)
                 }
-                .frame(width: geometry.size.width, height: toolbarHeight)
+                .frame(width: geometry.size.width, height: max(0, geometry.size.height - 60))
                 .clipped()
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
@@ -1382,7 +1399,7 @@ struct ContentView: View {
                 Image(systemName: icon).font(.system(size: 23, weight: .regular))
             }
         }
-        .frame(width: toolbarButtonWidth, height: toolbarButtonHeight)
+        .frame(width: 52, height: 44)
         .foregroundColor(Color.retroLeatherLight)
         .buttonStyle(PlainButtonStyle())
         .disabled(!enabled)
@@ -1405,18 +1422,9 @@ struct ContentView: View {
         return NoteMetadata(relativeDate: relativeDate, timestamp: formatter.string(from: date))
     }
 
-    private func toolbarHorizontalInset(for containerWidth: CGFloat) -> CGFloat {
-        let preferredInset = 320 / UIScreen.main.scale
-        let maxInsetThatKeepsButtonsVisible = max(0, (containerWidth - 4 * toolbarButtonWidth) / 2)
-        return min(preferredInset, maxInsetThatKeepsButtonsVisible)
+    private var physical200PixelInset: CGFloat {
+        200 / UIScreen.main.scale
     }
-
-    private var toolbarBottomInset: CGFloat {
-        100 / UIScreen.main.scale
-    }
-
-    private var toolbarButtonWidth: CGFloat { 52 }
-    private var toolbarButtonHeight: CGFloat { 44 }
 }
 
 /// Keeps the note surface continuous at the screen edges, without system white bars.
