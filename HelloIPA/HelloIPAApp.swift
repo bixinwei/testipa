@@ -767,7 +767,7 @@ final class LocalTextShareServer: ObservableObject {
         <head>
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width,initial-scale=1">
-          <title>HelloIPA 文本分享</title>
+          <title>HelloIPA 备忘录分享</title>
           <style>
             :root {
               color-scheme: light;
@@ -897,8 +897,8 @@ final class LocalTextShareServer: ObservableObject {
         </head>
         <body>
           <main class="card">
-            <p class="eyebrow">LAN Text Share</p>
-            <h1>来自 iPhone 的文本</h1>
+            <p class="eyebrow">LAN Notes Share</p>
+            <h1>来自 iPhone 的备忘录</h1>
             <textarea id="text">\(escapedText)</textarea>
             <button id="syncButton" type="button">同步到手机</button>
             <div class="status" id="status"></div>
@@ -1375,7 +1375,7 @@ struct ShareAddressSheet: View {
                         }
                         .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.12, green: 0.34, blue: 0.67)))
 
-                        Text("电脑打开后会看到当前这段文本内容。")
+                        Text("电脑打开后会看到当前正文中的文字和图片。")
                             .font(.footnote)
                             .foregroundColor(Color.retroMetadata)
                     } else if let errorMessage = server.errorMessage {

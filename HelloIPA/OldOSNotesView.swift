@@ -203,13 +203,19 @@ struct OldOSNotesRootView: View {
                     title: Text("选择图片来源"),
                     buttons: [
                         .default(Text("相册")) {
-                            activePicker = .photoLibrary
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                activePicker = .photoLibrary
+                            }
                         },
                         .default(Text("剪贴板")) {
-                            insertImageFromClipboard()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                insertImageFromClipboard()
+                            }
                         },
                         .default(Text("文件")) {
-                            activePicker = .files
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                activePicker = .files
+                            }
                         },
                         .cancel()
                     ]
