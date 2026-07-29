@@ -599,10 +599,11 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         let viewWidth = textView.bounds.width > 0
             ? textView.bounds.width
             : UIScreen.main.bounds.width
-        return max(
-            80,
+        let contentWidth = max(
+            1,
             viewWidth - textView.textContainerInset.left - textView.textContainerInset.right
         )
+        return contentWidth * 0.8
     }
 
     func makeCoordinator() -> Coordinator {

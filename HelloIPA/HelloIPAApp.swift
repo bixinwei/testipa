@@ -465,7 +465,7 @@ final class LocalTextShareServer: ObservableObject {
     @Published private(set) var shareURL: URL?
     @Published private(set) var errorMessage: String?
     @Published private(set) var isSharingEnabled = false
-    @Published private(set) var syncedText: String
+    @Published private(set) var syncedDocument: SharedNoteDocument
 
     private let queue = DispatchQueue(label: "helloipa.local-text-server")
     private let preferredPorts: [UInt16] = [8080, 8081, 8082, 8090]
@@ -477,7 +477,7 @@ final class LocalTextShareServer: ObservableObject {
     private var nextPortIndex = 0
 
     init(initialText: String = AppDefaults.initialText, initialImages: [NoteImage] = []) {
-        self.syncedText = initialText
+        self.syncedDocument = SharedNoteDocument(text: initialText, images: initialImages)
         self.currentText = initialText
         self.currentImages = initialImages
     }
@@ -487,13 +487,14 @@ final class LocalTextShareServer: ObservableObject {
     }
 
     func updateSharedDocument(text: String, images: [NoteImage]) {
+        let document = SharedNoteDocument(text: text, images: images)
         queue.async {
             self.currentText = text
             self.currentImages = images
         }
         DispatchQueue.main.async {
-            if self.syncedText != text {
-                self.syncedText = text
+            if self.syncedDocument != document {
+                self.syncedDocument = document
             }
         }
     }
@@ -698,7 +699,7 @@ final class LocalTextShareServer: ObservableObject {
                         additionalHeaders: ["Cache-Control": "private, max-age=3600"]
                     )
                 } else if request.requestLine.hasPrefix("POST "), request.path == "/sync" {
-                    self.updateSharedText(request.body)
+                    self.applyWebSync(request.body)
                     let body = "{\"ok\":true}"
                     response = self.httpDataResponse(
                         statusLine: "HTTP/1.1 200 OK\r\n",
@@ -758,7 +759,6 @@ final class LocalTextShareServer: ObservableObject {
     }
 
     private func makeHTMLPage(with text: String, images: [NoteImage]) -> String {
-        let escapedText = Self.escapeHTML(text)
         let renderedDocument = Self.renderDocumentHTML(text: text, images: images)
 
         return """
@@ -810,7 +810,7 @@ final class LocalTextShareServer: ObservableObject {
               margin: 0 0 16px;
               font-size: 28px;
             }
-            textarea {
+            .document-editor {
               width: 100%;
               min-height: 260px;
               padding: 16px;
@@ -821,7 +821,13 @@ final class LocalTextShareServer: ObservableObject {
               font: inherit;
               font-size: 17px;
               line-height: 1.6;
-              resize: vertical;
+              white-space: pre-wrap;
+              overflow-wrap: anywhere;
+              outline: none;
+            }
+            .document-editor:focus {
+              border-color: #9bbcf1;
+              box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.12);
             }
             button {
               margin-top: 16px;
@@ -848,23 +854,13 @@ final class LocalTextShareServer: ObservableObject {
               line-height: 1.7;
               word-break: break-word;
             }
-            .preview-title {
-              margin: 28px 0 10px;
-              font-size: 18px;
-            }
-            .document-preview {
-              padding: 18px;
-              border: 1px solid var(--line);
-              border-radius: 18px;
-              background: #fff;
-              font-size: 17px;
-              line-height: 1.6;
-              white-space: pre-wrap;
-              overflow-wrap: anywhere;
-            }
             .image-block {
               margin: 14px 0;
+              display: inline-block;
+              width: fit-content;
+              max-width: 80%;
               white-space: normal;
+              vertical-align: top;
             }
             .image-block img {
               display: block;
@@ -899,17 +895,60 @@ final class LocalTextShareServer: ObservableObject {
           <main class="card">
             <p class="eyebrow">LAN Notes Share</p>
             <h1>来自 iPhone 的备忘录</h1>
-            <textarea id="text">\(escapedText)</textarea>
+            <div
+              id="editor"
+              class="document-editor"
+              contenteditable="true"
+              role="textbox"
+              aria-multiline="true"
+            >\(renderedDocument)</div>
             <button id="syncButton" type="button">同步到手机</button>
             <div class="status" id="status"></div>
-            <div class="content">在这个页面修改文本后，点击“同步到手机”，手机 App 内的文本内容会立即更新。</div>
-            <h2 class="preview-title">正文预览</h2>
-            <section class="document-preview">\(renderedDocument)</section>
+            <div class="content">直接在上方正文中编辑，完成后点击“同步到手机”。图片下方可以复制或下载原文件。</div>
           </main>
           <script>
             const button = document.getElementById('syncButton');
-            const textArea = document.getElementById('text');
+            const editor = document.getElementById('editor');
             const status = document.getElementById('status');
+
+            function serializeEditor() {
+              const clone = editor.cloneNode(true);
+              const markers = new Map();
+
+              clone.querySelectorAll('.image-block[data-image-id]').forEach((block, index) => {
+                const marker = `\\uE000HELLOIPA_IMAGE_${index}_\\uE001`;
+                markers.set(marker, block.dataset.imageId);
+                block.replaceWith(document.createTextNode(marker));
+              });
+
+              clone.removeAttribute('id');
+              clone.contentEditable = 'false';
+              clone.style.position = 'fixed';
+              clone.style.left = '-10000px';
+              clone.style.top = '0';
+              clone.style.width = editor.offsetWidth + 'px';
+              clone.style.visibility = 'hidden';
+              document.body.appendChild(clone);
+              const linearText = clone.innerText.replace(/\\r\\n/g, '\\n');
+              clone.remove();
+              const markerPattern = /\\uE000HELLOIPA_IMAGE_(\\d+)_\\uE001/g;
+              const images = [];
+              let text = '';
+              let cursor = 0;
+              let match;
+
+              while ((match = markerPattern.exec(linearText)) !== null) {
+                text += linearText.slice(cursor, match.index);
+                const marker = match[0];
+                const id = markers.get(marker);
+                if (id) {
+                  images.push({ id, location: text.length });
+                }
+                cursor = match.index + marker.length;
+              }
+              text += linearText.slice(cursor);
+              return { text, images };
+            }
 
             button.addEventListener('click', async () => {
               button.disabled = true;
@@ -920,9 +959,9 @@ final class LocalTextShareServer: ObservableObject {
                 const response = await fetch('/sync', {
                   method: 'POST',
                   headers: {
-                    'Content-Type': 'text/plain;charset=utf-8'
+                    'Content-Type': 'application/json;charset=utf-8'
                   },
-                  body: textArea.value
+                  body: JSON.stringify(serializeEditor())
                 });
 
                 if (!response.ok) {
@@ -1011,14 +1050,15 @@ final class LocalTextShareServer: ObservableObject {
             let previewPath = "/preview/\(image.id.uuidString)"
             let filename = escapeHTML(image.filename)
             html += """
-            <div class="image-block">
-              <a href="\(imagePath)" target="_blank" rel="noopener">
-                <img src="\(previewPath)" alt="\(filename)">
-              </a>
+            <div
+              class="image-block"
+              data-image-id="\(image.id.uuidString)"
+              contenteditable="false"
+            >
+              <img src="\(previewPath)" alt="\(filename)">
               <div class="image-actions">
-                <a href="\(imagePath)" target="_blank" rel="noopener">查看原图</a>
-                <a href="\(imagePath)" download="\(filename)">下载图片</a>
-                <button type="button" data-copy-image="\(previewPath)">复制图片</button>
+                <button type="button" data-copy-image="\(previewPath)">复制</button>
+                <a href="\(imagePath)" download="\(filename)">下载</a>
               </div>
             </div>
             """
@@ -1029,6 +1069,37 @@ final class LocalTextShareServer: ObservableObject {
             html += escapeHTML(nsText.substring(from: cursor))
         }
         return html
+    }
+
+    private func applyWebSync(_ body: String) {
+        guard let data = body.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(WebSyncPayload.self, from: data) else {
+            updateSharedText(body)
+            return
+        }
+
+        let maximumLocation = (payload.text as NSString).length
+        let imagesByID = Dictionary(uniqueKeysWithValues: currentImages.map { ($0.id, $0) })
+        var seenIDs = Set<UUID>()
+        let updatedImages = payload.images.compactMap { position -> NoteImage? in
+            guard seenIDs.insert(position.id).inserted,
+                  var image = imagesByID[position.id] else {
+                return nil
+            }
+            image.location = min(max(0, position.location), maximumLocation)
+            return image
+        }
+        updateSharedDocument(text: payload.text, images: updatedImages)
+    }
+
+    private struct WebSyncPayload: Decodable {
+        let text: String
+        let images: [WebSyncImagePosition]
+    }
+
+    private struct WebSyncImagePosition: Decodable {
+        let id: UUID
+        let location: Int
     }
 
     private static func imageID(from path: String) -> UUID? {
@@ -1149,6 +1220,11 @@ final class LocalTextShareServer: ObservableObject {
     }
 }
 
+struct SharedNoteDocument: Equatable {
+    let text: String
+    let images: [NoteImage]
+}
+
 struct NoteImage: Identifiable, Codable, Equatable {
     var id = UUID()
     var location: Int
@@ -1226,11 +1302,14 @@ final class AppViewModel: ObservableObject {
             initialImages: restoredNotes[0].images
         )
 
-        server.$syncedText
+        server.$syncedDocument
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] newValue in
-                guard let self = self, self.text != newValue else { return }
-                self.text = newValue
+            .sink { [weak self] document in
+                guard let self = self,
+                      self.text != document.text || self.currentNote.images != document.images else {
+                    return
+                }
+                self.updateSelectedDocument(text: document.text, images: document.images)
             }
             .store(in: &cancellables)
 
