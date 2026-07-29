@@ -1159,7 +1159,7 @@ struct NotesListView: View {
                         .clipped()
                 }
                 ScrollView(.vertical, showsIndicators: true) {
-                    LazyVStack(spacing: 1, alignment: .leading) {
+                    VStack(spacing: 1) {
                         ForEach(viewModel.notes) { note in
                             Button(action: { viewModel.select(note) }) {
                                 HStack(spacing: 12) {
