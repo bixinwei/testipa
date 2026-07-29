@@ -19,8 +19,9 @@ private extension Color {
     static let retroLeatherLight = Color(red: 0.56, green: 0.38, blue: 0.23)
     // Match the warm ivory paper and muted graphite rules of the original Notes app.
     static let retroPaper = Color(red: 1.00, green: 0.99, blue: 0.82)
-    static let retroPaperLine = Color(red: 0.47, green: 0.48, blue: 0.39)
+    static let retroPaperLine = Color(red: 0.60, green: 0.56, blue: 0.37)
     static let retroPaperMargin = Color(red: 0.47, green: 0.32, blue: 0.18)
+    static let retroMetadata = Color(red: 0.49, green: 0.29, blue: 0.17)
     static let retroWoodDark = Color(red: 0.16, green: 0.10, blue: 0.06)
     static let retroWoodLight = Color(red: 0.24, green: 0.15, blue: 0.09)
     static let retroLCDBackground = Color(red: 0.05, green: 0.09, blue: 0.06)
@@ -98,10 +99,31 @@ struct OldOSHeaderControl: View {
             }
 
             if let title = title {
+                // The original Notes return button has a distinct rounded left
+                // cap and arrow; the stretchable center alone looks rectangular.
+                if let backCap = oldOSImage(named: "oldos-notes-back") {
+                    backCap
+                        .renderingMode(.original)
+                        .resizable()
+                        .frame(width: 19, height: 30)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if let arrow = oldOSImage(named: "oldos-notes-back-arrow") {
+                    arrow
+                        .renderingMode(.original)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 11, height: 14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.leading, 5)
+                }
+
                 Text(title)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.white)
                     .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
+                    .padding(.leading, 10)
             }
 
             if let iconName = iconName {
@@ -155,23 +177,10 @@ struct RetroTitleBar<Trailing: View>: View {
                     .clipped()
             }
 
-            // A subtle cross-hatch keeps the bar from looking like a flat gradient.
-            GeometryReader { geometry in
-                Path { path in
-                    var x: CGFloat = -geometry.size.height
-                    while x < geometry.size.width {
-                        path.move(to: CGPoint(x: x, y: 0))
-                        path.addLine(to: CGPoint(x: x + geometry.size.height, y: geometry.size.height))
-                        x += 7
-                    }
-                }
-                .stroke(Color.white.opacity(0.055), lineWidth: 1)
-            }
-
             VStack(spacing: 0) {
-                Rectangle().fill(Color.white.opacity(0.35)).frame(height: 1)
+                Rectangle().fill(Color.white.opacity(0.22)).frame(height: 1)
                 Spacer()
-                Rectangle().fill(Color.black.opacity(0.45)).frame(height: 1)
+                Rectangle().fill(Color.black.opacity(0.34)).frame(height: 1)
             }
 
             Text(displayTitle)
@@ -229,7 +238,7 @@ struct RuledPaperBackground: View {
                         y += 26
                     }
                 }
-                .stroke(Color.retroPaperLine, lineWidth: 1)
+                .stroke(Color.retroPaperLine.opacity(0.70), lineWidth: 1)
 
                 Path { path in
                     path.move(to: CGPoint(x: 30, y: 0))
@@ -257,8 +266,8 @@ struct StableTextEditor: UIViewRepresentable {
     @Binding var scrollOffset: CGFloat
 
     // Match the handwritten face used for each title in the Notes list.
-    private static let noteFont = UIFont(name: "MarkerFelt-Thin", size: 16) ?? .systemFont(ofSize: 16)
-    private static let noteTextColor = UIColor(red: 0.16, green: 0.10, blue: 0.06, alpha: 1)
+    private static let noteFont = UIFont(name: "MarkerFelt-Wide", size: 16) ?? .systemFont(ofSize: 16, weight: .semibold)
+    private static let noteTextColor = UIColor(red: 0.10, green: 0.07, blue: 0.04, alpha: 1)
     private static let noteLineHeight: CGFloat = 26
 
     private static func noteAttributes() -> [NSAttributedString.Key: Any] {
@@ -1260,8 +1269,8 @@ struct ContentView: View {
                     Spacer()
                     Text(editorDate)
                 }
-                    .font(.custom("MarkerFelt-Thin", size: 16))
-                    .foregroundColor(Color.retroLeatherLight.opacity(0.72))
+                    .font(.custom("MarkerFelt-Wide", size: 16))
+                    .foregroundColor(Color.retroMetadata.opacity(0.86))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(.leading, 40)
                     .padding(.trailing, 34)
