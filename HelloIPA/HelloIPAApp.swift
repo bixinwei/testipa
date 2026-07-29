@@ -1229,6 +1229,7 @@ final class PublicTextShareClient: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 45
 
         do {
             request.httpBody = try JSONEncoder().encode(
@@ -1246,10 +1247,34 @@ final class PublicTextShareClient: ObservableObject {
                 guard let self = self else { return }
                 self.isPublishing = false
 
-                guard error == nil, let data = data,
-                      let http = response as? HTTPURLResponse,
-                      (200...299).contains(http.statusCode) else {
-                    self.errorMessage = "公网分享创建失败，请检查网络后重试。"
+                if let error = error as NSError? {
+                    self.errorMessage = "无法连接公网分享服务（\(error.localizedDescription)）。"
+                    return
+                }
+
+                guard let data = data, let http = response as? HTTPURLResponse else {
+                    self.errorMessage = "公网分享服务没有返回有效响应。"
+                    return
+                }
+
+                guard (200...299).contains(http.statusCode) else {
+                    let serverMessage = Self.serverMessage(from: data)
+                    switch http.statusCode {
+                    case 413:
+                        self.errorMessage = "图片或正文过大，公网服务拒绝了本次上传。"
+                    case 401, 403:
+                        self.errorMessage = "访问密码不正确，无法更新已有公网分享。"
+                    case 410:
+                        self.shortCode = nil
+                        self.shareURL = nil
+                        self.expiresAt = nil
+                        // The service deliberately rejects expired short codes.
+                        // Retrying once without a code creates a new 10-minute
+                        // share instead of asking the user to tap again.
+                        self.publish(text: text, images: images, password: trimmedPassword)
+                    default:
+                        self.errorMessage = serverMessage ?? "公网服务返回错误（HTTP \(http.statusCode)）。"
+                    }
                     return
                 }
 
@@ -1264,6 +1289,13 @@ final class PublicTextShareClient: ObservableObject {
                 self.expiresAt = result.expiresAt
             }
         }.resume()
+    }
+
+    private static func serverMessage(from data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return (object["message"] as? String) ?? (object["error"] as? String)
     }
 }
 
