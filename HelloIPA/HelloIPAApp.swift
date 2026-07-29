@@ -1176,8 +1176,8 @@ final class LocalTextShareServer: ObservableObject {
 }
 
 /// Client for the separately hosted, password-protected public Notes share.
-/// The service keeps only the latest link active and revokes prior links when
-/// a replacement is created.
+/// The service expires every link after ten minutes and revokes prior links
+/// immediately when a replacement is created.
 final class PublicTextShareClient: ObservableObject {
     private static let apiBaseURL = URL(string: "https://helloipa-share.agile-fig-7406.chatgpt.site")!
 
@@ -1206,8 +1206,8 @@ final class PublicTextShareClient: ObservableObject {
 
     func publish(text: String, images: [NoteImage], password: String) {
         let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedPassword.isEmpty else {
-            errorMessage = "请先设置公网分享访问密码。"
+        guard (1...8).contains(trimmedPassword.count) else {
+            errorMessage = "公网分享访问密码必须为 1–8 个字符。"
             return
         }
 
@@ -1556,7 +1556,7 @@ struct ShareAddressSheet: View {
                         .font(.custom("Helvetica Neue Bold", size: 18))
                         .foregroundColor(Color.retroMetadata)
 
-                    Text("每次创建都会立即使旧公网链接失效；当前链接长期有效，打开时必须输入密码。")
+                    Text("每次创建都会立即使旧公网链接失效；新链接固定 10 分钟有效，打开时必须输入密码。")
                         .font(.custom("Helvetica Neue Regular", size: 15))
                         .foregroundColor(Color.retroMetadata)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1589,7 +1589,12 @@ struct ShareAddressSheet: View {
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .stroke(Color.retroMetadata.opacity(0.55), lineWidth: 1)
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .onChange(of: publicPassword) { value in
+                            if value.count > 8 {
+                                publicPassword = String(value.prefix(8))
+                            }
+                        }
 
                     Button(action: { publishPublicShare(publicPassword) }) {
                         HStack {
@@ -1621,7 +1626,7 @@ struct ShareAddressSheet: View {
                                 .font(.footnote)
                                 .foregroundColor(Color.retroMetadata)
                         } else {
-                            Text("创建新链接后，当前链接将立即失效。")
+                            Text("有效期为 10 分钟；创建新链接后，当前链接将立即失效。")
                                 .font(.footnote)
                                 .foregroundColor(Color.retroMetadata)
                         }
