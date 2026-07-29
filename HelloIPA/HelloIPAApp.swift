@@ -282,6 +282,7 @@ struct NoteMetadataHeader: View {
 /// UITextView, so they stay registered with the glyph baselines while editing.
 final class OldOSLinedTextView: UITextView {
     private let horizontalLineColor = UIColor(red: 78/255, green: 90/255, blue: 130/255, alpha: 0.4)
+    private let verticalLineColor = UIColor(red: 161/255, green: 93/255, blue: 68/255, alpha: 0.45)
 
     override func draw(_ rect: CGRect) {
         super.draw(rect)
@@ -301,6 +302,16 @@ final class OldOSLinedTextView: UITextView {
             context.move(to: CGPoint(x: bounds.minX, y: y))
             context.addLine(to: CGPoint(x: bounds.maxX, y: y))
         }
+        context.strokePath()
+
+        // This is the verticalLineColor path from DALinedTextView.m. It is
+        // expressed in the scroll view's content coordinates, so it stays
+        // continuous from the first ruled line through every scroll position.
+        context.beginPath()
+        context.setStrokeColor(verticalLineColor.cgColor)
+        let marginX = bounds.minX + textContainerInset.left - 3 / scale
+        context.move(to: CGPoint(x: marginX, y: bounds.minY))
+        context.addLine(to: CGPoint(x: marginX, y: bounds.minY + bounds.height))
         context.strokePath()
     }
 
@@ -1344,11 +1355,9 @@ struct ContentView: View {
                         height: max(0, geometry.size.height - 60)
                     )
 
-                    // Match OldOS Notes.swift: a flexible spacer sits at both
-                    // edges and between every toolbar control, distributing
-                    // the four actions across the entire bottom bar.
+                    // The user-specified 200 physical-pixel margins are
+                    // converted to points for the active Retina display.
                     HStack(spacing: 0) {
-                        Spacer(minLength: 0)
                         toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
                         Spacer(minLength: 0)
                         toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
@@ -1356,10 +1365,10 @@ struct ContentView: View {
                         toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
                         Spacer(minLength: 0)
                         toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
-                        Spacer(minLength: 0)
                     }
+                    .padding(.horizontal, physical200PixelInset)
                     .frame(maxWidth: .infinity)
-                    .padding(.bottom, 15)
+                    .padding(.bottom, physical200PixelInset)
                 }
                 .frame(width: geometry.size.width, height: max(0, geometry.size.height - 60))
                 .clipped()
@@ -1411,6 +1420,10 @@ struct ContentView: View {
         formatter.locale = Locale(identifier: "en_US")
         formatter.dateFormat = "MMM d  h:mm a"
         return NoteMetadata(relativeDate: relativeDate, timestamp: formatter.string(from: date))
+    }
+
+    private var physical200PixelInset: CGFloat {
+        200 / UIScreen.main.scale
     }
 }
 
