@@ -172,7 +172,7 @@ struct RetroTitleBar<Trailing: View>: View {
             }
 
             Text(displayTitle)
-                .font(.custom("Helvetica Neue Bold", size: 22))
+                .font(.custom("Helvetica Neue Bold", size: 16))
                 .foregroundColor(.white)
                 .shadow(color: Color.black.opacity(0.21), radius: 0, x: 0, y: -1)
                 .lineLimit(1)
@@ -1355,7 +1355,7 @@ struct ContentView: View {
                         height: max(0, geometry.size.height - 60)
                     )
 
-                    // The user-specified 200 physical-pixel margins are
+                    // The user-specified physical-pixel margins are
                     // converted to points for the active Retina display.
                     HStack(spacing: 0) {
                         toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
@@ -1366,9 +1366,9 @@ struct ContentView: View {
                         Spacer(minLength: 0)
                         toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
                     }
-                    .padding(.horizontal, physical200PixelInset)
+                    .padding(.horizontal, toolbarHorizontalInset)
                     .frame(maxWidth: .infinity)
-                    .padding(.bottom, physical200PixelInset)
+                    .padding(.bottom, toolbarBottomInset)
                 }
                 .frame(width: geometry.size.width, height: max(0, geometry.size.height - 60))
                 .clipped()
@@ -1422,8 +1422,12 @@ struct ContentView: View {
         return NoteMetadata(relativeDate: relativeDate, timestamp: formatter.string(from: date))
     }
 
-    private var physical200PixelInset: CGFloat {
-        200 / UIScreen.main.scale
+    private var toolbarHorizontalInset: CGFloat {
+        320 / UIScreen.main.scale
+    }
+
+    private var toolbarBottomInset: CGFloat {
+        160 / UIScreen.main.scale
     }
 }
 
