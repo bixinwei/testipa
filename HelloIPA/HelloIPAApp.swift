@@ -308,17 +308,6 @@ final class OldOSLinedTextView: UITextView {
     override var font: UIFont? { didSet { setNeedsDisplay() } }
     override var textContainerInset: UIEdgeInsets { didSet { setNeedsDisplay() } }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        // UIKit's text container is independent of the SwiftUI wrapper's
-        // layout proposal. Keep it tied to the actual rendered width so long
-        // text can wrap but can never widen the note surface.
-        textContainer.widthTracksTextView = true
-        let availableWidth = max(0, bounds.width - textContainerInset.left - textContainerInset.right)
-        if textContainer.size.width != availableWidth {
-            textContainer.size = CGSize(width: availableWidth, height: .greatestFiniteMagnitude)
-        }
-    }
 }
 
 struct StableTextEditor: UIViewRepresentable {
