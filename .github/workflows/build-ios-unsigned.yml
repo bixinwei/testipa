@@ -35,8 +35,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show available iPhone 16 Pro Max runtime
-        run: xcrun simctl list devices available | grep -F "iPhone 16 Pro Max"
+      - name: Prepare iPhone 16 Pro Max simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Available runtimes:"
+          xcrun simctl list runtimes available
+          echo "Available device types:"
+          xcrun simctl list devicetypes
+
+          DEVICE_TYPE_ID="$(xcrun simctl list devicetypes | sed -n 's/.*iPhone 16 Pro Max (\([^)]*\)).*/\1/p' | head -n 1)"
+          RUNTIME_ID="$(xcrun simctl list runtimes available | sed -n 's/.*(\(com.apple.CoreSimulator.SimRuntime.iOS-[^)]*\)).*/\1/p' | tail -n 1)"
+          if [[ -z "$DEVICE_TYPE_ID" || -z "$RUNTIME_ID" ]]; then
+            echo "Could not find an iPhone 16 Pro Max device type or an iOS runtime" >&2
+            exit 1
+          fi
+
+          DEVICE_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 16 Pro Max (\([0-9A-F-]*\)).*/\1/p' | head -n 1)"
+          if [[ -z "$DEVICE_UDID" ]]; then
+            DEVICE_UDID="$(xcrun simctl create 'iPhone 16 Pro Max' "$DEVICE_TYPE_ID" "$RUNTIME_ID")"
+            echo "Created iPhone 16 Pro Max ($DEVICE_UDID) using $RUNTIME_ID"
+          else
+            echo "Using existing iPhone 16 Pro Max ($DEVICE_UDID)"
+          fi
+          {
+            echo "SIM_DEVICE_UDID=$DEVICE_UDID"
+            echo "SIM_DEVICE_NAME=iPhone 16 Pro Max"
+          } >> "$GITHUB_ENV"
 
       - name: Build simulator app
         run: |
@@ -45,7 +70,7 @@ jobs:
             -scheme HelloIPA \
             -configuration Debug \
             -sdk iphonesimulator \
-            -destination 'platform=iOS Simulator,name=iPhone 16 Pro Max' \
+            -destination "id=$SIM_DEVICE_UDID" \
             -derivedDataPath build/Simulator \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -59,23 +84,23 @@ jobs:
           APP_PATH="$(find build/Simulator -type d -name HelloIPA.app -print -quit)"
           mkdir -p build/simulator-screenshots
 
-          xcrun simctl boot "$DEVICE_NAME" 2>/dev/null || true
-          xcrun simctl bootstatus "$DEVICE_NAME" -b
-          xcrun simctl install "$DEVICE_NAME" "$APP_PATH"
+          xcrun simctl boot "$SIM_DEVICE_UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$SIM_DEVICE_UDID" -b
+          xcrun simctl install "$SIM_DEVICE_UDID" "$APP_PATH"
 
-          xcrun simctl launch "$DEVICE_NAME" "$BUNDLE_ID"
+          xcrun simctl launch "$SIM_DEVICE_UDID" "$BUNDLE_ID"
           sleep 2
-          xcrun simctl io "$DEVICE_NAME" screenshot build/simulator-screenshots/home.png
+          xcrun simctl io "$SIM_DEVICE_UDID" screenshot build/simulator-screenshots/home.png
 
-          xcrun simctl terminate "$DEVICE_NAME" "$BUNDLE_ID" || true
-          xcrun simctl launch "$DEVICE_NAME" "$BUNDLE_ID" -HelloIPA.ShowDetail
+          xcrun simctl terminate "$SIM_DEVICE_UDID" "$BUNDLE_ID" || true
+          xcrun simctl launch "$SIM_DEVICE_UDID" "$BUNDLE_ID" -HelloIPA.ShowDetail
           sleep 2
-          xcrun simctl io "$DEVICE_NAME" screenshot build/simulator-screenshots/detail.png
+          xcrun simctl io "$SIM_DEVICE_UDID" screenshot build/simulator-screenshots/detail.png
 
-          xcrun simctl terminate "$DEVICE_NAME" "$BUNDLE_ID" || true
-          xcrun simctl launch "$DEVICE_NAME" "$BUNDLE_ID" -HelloIPA.ShowShare
+          xcrun simctl terminate "$SIM_DEVICE_UDID" "$BUNDLE_ID" || true
+          xcrun simctl launch "$SIM_DEVICE_UDID" "$BUNDLE_ID" -HelloIPA.ShowShare
           sleep 2
-          xcrun simctl io "$DEVICE_NAME" screenshot build/simulator-screenshots/share.png
+          xcrun simctl io "$SIM_DEVICE_UDID" screenshot build/simulator-screenshots/share.png
 
       - name: Upload simulator screenshots
         uses: actions/upload-artifact@v4
