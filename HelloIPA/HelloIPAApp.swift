@@ -49,27 +49,26 @@ private func oldOSImage(named name: String) -> Image? {
 private func oldOSNotesButtonBackground() -> Image? {
     guard let cap = oldOSUIImage(named: "oldos-notes-back"),
           let center = oldOSUIImage(named: "oldos-notes-button-center"),
-          let leather = oldOSUIImage(named: "oldos-notes-topbar"),
-          let capMask = cap.cgImage,
-          let centerMask = center.cgImage else { return nil }
+          let leather = oldOSUIImage(named: "oldos-notes-topbar") else { return nil }
 
     let size = CGSize(width: 62, height: 30)
     let format = UIGraphicsImageRendererFormat()
     format.scale = 2
     format.opaque = false
+
+    let capRect = CGRect(x: 0, y: 0, width: cap.size.width, height: size.height)
+    let centerRect = CGRect(x: cap.size.width - 5, y: 0, width: size.width - cap.size.width + 5, height: size.height)
+    let silhouette = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+        cap.draw(in: capRect)
+        center.draw(in: centerRect)
+    }
+
     let composite = UIGraphicsImageRenderer(size: size, format: format).image { rendererContext in
         let context = rendererContext.cgContext
-        let capRect = CGRect(x: 0, y: 0, width: cap.size.width, height: size.height)
-        let centerRect = CGRect(x: cap.size.width - 5, y: 0, width: size.width - cap.size.width + 5, height: size.height)
         let leatherOrigin = CGPoint(x: -32, y: -7)
 
         context.saveGState()
-        context.clip(to: capRect, mask: capMask)
-        leather.draw(at: leatherOrigin)
-        context.restoreGState()
-
-        context.saveGState()
-        context.clip(to: centerRect, mask: centerMask)
+        context.clip(to: CGRect(origin: .zero, size: size), mask: silhouette.cgImage!)
         leather.draw(at: leatherOrigin)
         context.restoreGState()
     }
