@@ -4,6 +4,14 @@
   "private": true,
   "description": "OldOS Notes Windows port with LAN text sharing",
   "main": "main.js",
-  "scripts": { "start": "electron ." },
-  "devDependencies": { "electron": "^31.0.0" }
+  "scripts": { "start": "electron .", "dist": "electron-builder --win nsis portable" },
+  "build": {
+    "appId": "com.example.helloipa.windows",
+    "productName": "HelloIPA Windows",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "preload.js", "renderer.html", "renderer.css", "renderer.js", "assets/**/*"],
+    "win": { "target": ["nsis", "portable"] },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+  },
+  "devDependencies": { "electron": "^31.0.0", "electron-builder": "^24.13.3" }
 }

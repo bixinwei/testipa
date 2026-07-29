@@ -10,7 +10,7 @@
 - 局域网 HTTP 分享：Windows 浏览器访问地址并把文本同步回应用
 - 数据保存到 Electron `userData/notes.json`
 
-## 运行
+## 运行源码
 
 安装 Node.js 18+ 后在本目录执行：
 
@@ -18,5 +18,11 @@
 npm install
 npm start
 ```
+
+不要直接双击 `renderer.html`；它只是渲染资源，脱离 Electron 会出现黑屏或无法使用 IPC。
+
+## 直接运行 EXE
+
+已生成便携版：`HelloIPAWindows.exe`（项目上级目录也有一份）。双击 EXE 即可运行，不需要打开 HTML，也不需要安装 Node.js。
 
 Windows 安装包可在此基础上接入 electron-builder；本项目不改变原 iOS 工程和素材源文件。
