@@ -249,6 +249,35 @@ struct ActivityIndicator: UIViewRepresentable {
     }
 }
 
+/// This is hosted inside the UITextView, matching OldOS's `destination_header`.
+/// A scroll view moves its subviews with its content, so the metadata and the
+/// ruled text share one coordinate system instead of being two SwiftUI overlays.
+struct NoteMetadata: Equatable {
+    let relativeDate: String
+    let timestamp: String
+}
+
+struct NoteMetadataHeader: View {
+    let metadata: NoteMetadata
+
+    var body: some View {
+        HStack {
+            Text(metadata.relativeDate)
+                .font(.custom("Helvetica Neue Bold", size: 14))
+            Spacer()
+            Text(metadata.timestamp)
+                .font(.custom("Helvetica Neue Regular", size: 14))
+        }
+        .foregroundColor(Color(red: 161/255, green: 93/255, blue: 68/255))
+        .padding(.leading, 32)
+        .padding(.trailing, 8)
+        .padding(.top, 10)
+        .padding(.bottom, 15)
+        .background(Color.clear)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 /// Swift port of OldOS/TextView/DALinedTextView.m. Lines belong to the scrolling
 /// UITextView, so they stay registered with the glyph baselines while editing.
 final class OldOSLinedTextView: UITextView {
@@ -281,7 +310,7 @@ final class OldOSLinedTextView: UITextView {
 
 struct StableTextEditor: UIViewRepresentable {
     @Binding var text: String
-    @Binding var scrollOffset: CGFloat
+    let metadata: NoteMetadata
 
     private static let noteFont = UIFont(name: "Noteworthy-Bold", size: 19) ?? .systemFont(ofSize: 19, weight: .bold)
     private static let noteTextColor = UIColor.black
@@ -309,7 +338,7 @@ struct StableTextEditor: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, scrollOffset: $scrollOffset)
+        Coordinator(text: $text)
     }
 
     func makeUIView(context: Context) -> OldOSLinedTextView {
@@ -330,6 +359,7 @@ struct StableTextEditor: UIViewRepresentable {
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
         textView.attributedText = Self.styledText(text)
+        context.coordinator.installMetadataHeader(in: textView, metadata: metadata)
         return textView
     }
 
@@ -339,6 +369,7 @@ struct StableTextEditor: UIViewRepresentable {
         textView.isOpaque = false
         textView.backgroundColor = .clear
         textView.overrideUserInterfaceStyle = .light
+        context.coordinator.updateMetadata(metadata)
         guard textView.text != text else { return }
 
         let selectedRange = textView.selectedRange
@@ -350,11 +381,28 @@ struct StableTextEditor: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         @Binding private var text: String
-        @Binding private var scrollOffset: CGFloat
+        private var metadataController: UIHostingController<NoteMetadataHeader>?
 
-        init(text: Binding<String>, scrollOffset: Binding<CGFloat>) {
+        init(text: Binding<String>) {
             _text = text
-            _scrollOffset = scrollOffset
+        }
+
+        func installMetadataHeader(in textView: OldOSLinedTextView, metadata: NoteMetadata) {
+            let controller = UIHostingController(rootView: NoteMetadataHeader(metadata: metadata))
+            let header = controller.view!
+            header.translatesAutoresizingMaskIntoConstraints = false
+            header.backgroundColor = .clear
+            textView.addSubview(header)
+            NSLayoutConstraint.activate([
+                header.topAnchor.constraint(equalTo: textView.topAnchor),
+                header.leadingAnchor.constraint(equalTo: textView.leadingAnchor),
+                header.widthAnchor.constraint(equalTo: textView.widthAnchor)
+            ])
+            metadataController = controller
+        }
+
+        func updateMetadata(_ metadata: NoteMetadata) {
+            metadataController?.rootView = NoteMetadataHeader(metadata: metadata)
         }
 
         func textViewDidChange(_ textView: UITextView) {
@@ -369,10 +417,10 @@ struct StableTextEditor: UIViewRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            // Preserve negative overscroll as well: while the user pulls the
-            // document down from its top edge, the ruled paper must travel
-            // down with its text rather than remaining fixed behind it.
-            scrollOffset = scrollView.contentOffset.y
+            // DALinedTextView draws the rules in the scroll view's content
+            // coordinate space. Ask UIKit to redraw whenever that coordinate
+            // space moves, exactly as its original implementation requires.
+            (scrollView as? OldOSLinedTextView)?.setNeedsDisplay()
         }
 
         func textView(_ textView: UITextView,
@@ -1037,51 +1085,36 @@ struct ShareAddressSheet: View {
     @State private var showingCopiedToast = false
 
     var body: some View {
-        ZStack(alignment: .top) {
-            VStack(spacing: 0) {
-                RetroTitleBar(title: "共享地址") {
-                    Button(action: onClose) {
-                        Text("关闭")
-                            .frame(width: 50, height: 30)
-                    }
-                    .buttonStyle(GlossyCapsuleButtonStyle(
-                        baseColor: Color(red: 0.12, green: 0.34, blue: 0.67),
-                        fontSize: 14
-                    ))
+        VStack(spacing: 0) {
+            RetroTitleBar(title: "共享地址") {
+                Button(action: onClose) {
+                    OldOSHeaderControl(title: "完成", iconName: nil)
+                        .frame(width: 55, height: 33)
                 }
+                .buttonStyle(PlainButtonStyle())
+            }
 
-                ZStack {
-                    Color.retroWoodDark
-                    LinearGradient(
-                        colors: [Color.retroWoodLight, Color.retroWoodDark],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    .opacity(0.7)
+            GeometryReader { _ in
+                ZStack(alignment: .topLeading) {
+                    Color.retroPaper
+                    if let paper = oldOSImage(named: "oldos-notes-body") {
+                        paper.resizable().scaledToFill().clipped()
+                    }
 
-                    RuledPaperBackground()
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(Color.black.opacity(0.62), lineWidth: 2)
-                        )
-                        .shadow(color: .black.opacity(0.65), radius: 2, x: 0, y: 2)
-                        .padding(12)
-
-                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 18) {
                     if let shareURL = server.shareURL {
                         Text("请让电脑和手机连接同一个 Wi-Fi，然后在浏览器打开下面这个地址：")
-                            .font(.system(size: 17, weight: .medium))
-                            .foregroundColor(Color.retroWoodDark)
+                            .font(.custom("Helvetica Neue Regular", size: 17))
+                            .foregroundColor(Color.retroMetadata)
 
                         Text(shareURL.absoluteString)
                             .font(.system(.body, design: .monospaced))
-                            .padding(14)
+                            .padding(10)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(Color.white.opacity(0.42))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .stroke(Color.retroLeatherDark.opacity(0.55), lineWidth: 1)
+                                .stroke(Color.retroMetadata.opacity(0.55), lineWidth: 1)
                             )
                             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
 
@@ -1090,15 +1123,15 @@ struct ShareAddressSheet: View {
                                 Image(systemName: "doc.on.doc")
                                 Text("复制这个地址")
                             }
-                            .font(.headline)
+                            .font(.custom("Helvetica Neue Bold", size: 17))
                             .frame(maxWidth: .infinity)
-                            .frame(height: 52)
+                            .frame(height: 44)
                         }
                         .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.12, green: 0.34, blue: 0.67)))
 
                         Text("电脑打开后会看到当前这段文本内容。")
                             .font(.footnote)
-                            .foregroundColor(Color.retroLeatherDark)
+                            .foregroundColor(Color.retroMetadata)
                     } else if let errorMessage = server.errorMessage {
                         Text("分享启动失败")
                             .font(.headline)
@@ -1109,30 +1142,34 @@ struct ShareAddressSheet: View {
                         HStack(spacing: 10) {
                             ActivityIndicator()
                             Text("正在启动局域网分享服务...")
-                                .foregroundColor(Color.retroLeatherDark)
+                            .foregroundColor(Color.retroMetadata)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
                     Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(32)
-                }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 24)
+                    .padding(.bottom, 15)
 
-                if showingCopiedToast {
-                    Text("已复制")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Color.black.opacity(0.82))
-                        .clipShape(Capsule())
-                        .padding(.top, 12)
+                    if showingCopiedToast {
+                        Text("已复制")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(Color.black.opacity(0.82))
+                            .clipShape(Capsule())
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                            .padding(.top, 12)
+                    }
                 }
             }
         }
-        .edgesIgnoringSafeArea(.bottom)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
     }
 
     private func copyAddress() {
@@ -1220,7 +1257,6 @@ struct NotesListView: View {
 struct ContentView: View {
     @ObservedObject var viewModel: AppViewModel
     @State private var showingDeleteConfirmation = false
-    @State private var editorScrollOffset: CGFloat = 0
 
     var body: some View {
         ZStack {
@@ -1266,22 +1302,8 @@ struct ContentView: View {
                 }
                 StableTextEditor(
                     text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 }),
-                    scrollOffset: $editorScrollOffset
+                    metadata: editorMetadata
                 )
-
-                HStack {
-                    Text("Today")
-                    Spacer()
-                    Text(editorDate)
-                }
-                    .font(.custom("Helvetica Neue Bold", size: 14))
-                    .foregroundColor(Color(red: 161/255, green: 93/255, blue: 68/255))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(.leading, 32)
-                    .padding(.trailing, 8)
-                    .padding(.top, 10)
-                    .allowsHitTesting(false)
-                    .offset(y: -editorScrollOffset)
 
                 HStack(spacing: 0) {
                     toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
@@ -1327,7 +1349,20 @@ struct ContentView: View {
         .opacity(enabled ? 1 : 0.5)
     }
 
-    private var editorDate: String { let f = DateFormatter(); f.locale = Locale(identifier: "en_US"); f.dateFormat = "MMM d  HH:mm"; return f.string(from: viewModel.currentNote.modifiedAt) }
+    private var editorMetadata: NoteMetadata {
+        let date = viewModel.currentNote.modifiedAt
+        let dayCount = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: date), to: Calendar.current.startOfDay(for: Date())).day ?? 0
+        let relativeDate: String
+        switch dayCount {
+        case ...0: relativeDate = "Today"
+        case 1: relativeDate = "1 day ago"
+        default: relativeDate = "\(dayCount) days ago"
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.dateFormat = "MMM d  h:mm a"
+        return NoteMetadata(relativeDate: relativeDate, timestamp: formatter.string(from: date))
+    }
 }
 
 /// Keeps the note surface continuous at the screen edges, without system white bars.
