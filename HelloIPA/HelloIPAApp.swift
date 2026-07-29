@@ -8,7 +8,6 @@ import Combine
 enum AppDefaults {
     static let savedTextKey = "helloipa.savedText"
     static let notesKey = "helloipa.notes"
-    static let publicSharePasswordKey = "helloipa.publicSharePassword"
     static let initialText = """
     这是一段示例文本。
     点击“分享文本”后，局域网内的电脑打开地址即可看到它。
@@ -1384,7 +1383,6 @@ final class AppViewModel: ObservableObject {
     }
 
     func publishPublicShare(password: String) {
-        UserDefaults.standard.set(password, forKey: AppDefaults.publicSharePasswordKey)
         publicShare.publish(text: text, images: currentNote.images, password: password)
     }
 
@@ -1625,9 +1623,6 @@ struct ShareAddressSheet: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        .onAppear {
-            publicPassword = UserDefaults.standard.string(forKey: AppDefaults.publicSharePasswordKey) ?? ""
-        }
     }
 
     private func copyAddress() {
