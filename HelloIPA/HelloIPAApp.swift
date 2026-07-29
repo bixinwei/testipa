@@ -1094,7 +1094,7 @@ struct ShareAddressSheet: View {
                 .buttonStyle(PlainButtonStyle())
             }
 
-            GeometryReader { _ in
+            GeometryReader { geometry in
                 ZStack(alignment: .topLeading) {
                     Color.retroPaper
                     if let paper = oldOSImage(named: "oldos-notes-body") {
@@ -1106,9 +1106,13 @@ struct ShareAddressSheet: View {
                         Text("请让电脑和手机连接同一个 Wi-Fi，然后在浏览器打开下面这个地址：")
                             .font(.custom("Helvetica Neue Regular", size: 17))
                             .foregroundColor(Color.retroMetadata)
+                            .fixedSize(horizontal: false, vertical: true)
 
                         Text(shareURL.absoluteString)
                             .font(.system(.body, design: .monospaced))
+                            .lineLimit(nil)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.leading)
                             .padding(10)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(Color.white.opacity(0.42))
@@ -1149,7 +1153,15 @@ struct ShareAddressSheet: View {
 
                     Spacer(minLength: 0)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    // `frame(maxWidth: .infinity).padding(...)` grows beyond
+                    // its parent on SwiftUI/iOS 13. Size the text column first
+                    // and then add the margins so its outside edge is exactly
+                    // the GeometryReader's edge.
+                    .frame(
+                        width: max(0, geometry.size.width - 40),
+                        height: max(0, geometry.size.height - 39),
+                        alignment: .topLeading
+                    )
                     .padding(.horizontal, 20)
                     .padding(.top, 24)
                     .padding(.bottom, 15)
@@ -1166,6 +1178,8 @@ struct ShareAddressSheet: View {
                             .padding(.top, 12)
                     }
                 }
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+                .clipped()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1277,47 +1291,50 @@ struct ContentView: View {
     }
 
     private var editor: some View {
-        VStack(spacing: 0) {
-            RetroTitleBar(
-                title: viewModel.currentNote.title,
-                truncatesTitle: true,
-                leading: AnyView(
-                    Button(action: { viewModel.showingList = true }) {
-                        OldOSHeaderControl(title: "Notes", iconName: nil)
-                            .frame(width: 55, height: 33)
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                RetroTitleBar(
+                    title: viewModel.currentNote.title,
+                    truncatesTitle: true,
+                    leading: AnyView(
+                        Button(action: { viewModel.showingList = true }) {
+                            OldOSHeaderControl(title: "Notes", iconName: nil)
+                                .frame(width: 55, height: 33)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    )
+                ) {
+                    Button(action: viewModel.createNote) {
+                        OldOSHeaderControl(title: nil, iconName: "oldos-toolbar-plus")
+                            .frame(width: 44, height: 30)
                     }
                     .buttonStyle(PlainButtonStyle())
-                )
-            ) {
-                Button(action: viewModel.createNote) {
-                    OldOSHeaderControl(title: nil, iconName: "oldos-toolbar-plus")
-                        .frame(width: 44, height: 30)
                 }
-                .buttonStyle(PlainButtonStyle())
-            }
-            ZStack(alignment: .bottom) {
-                Color.retroPaper
-                if let paper = oldOSImage(named: "oldos-notes-body") {
-                    paper.resizable().scaledToFill().clipped()
-                }
-                StableTextEditor(
-                    text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 }),
-                    metadata: editorMetadata
-                )
+                ZStack(alignment: .bottom) {
+                    Color.retroPaper
+                    if let paper = oldOSImage(named: "oldos-notes-body") {
+                        paper.resizable().scaledToFill().clipped()
+                    }
+                    StableTextEditor(
+                        text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 }),
+                        metadata: editorMetadata
+                    )
 
-                HStack(spacing: 0) {
-                    toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
-                    toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
-                    toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
-                    toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
+                    HStack(spacing: 0) {
+                        toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
+                        toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
+                        toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
+                        toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
+                    }
+                    .padding(.horizontal, 5)
+                    .padding(.bottom, 15)
                 }
-                .padding(.horizontal, 5)
-                .padding(.bottom, 15)
+                .frame(width: geometry.size.width, height: max(0, geometry.size.height - 60))
+                .clipped()
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
             .clipped()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
     }
 
