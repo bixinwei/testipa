@@ -42,24 +42,11 @@ private func oldOSImage(named name: String) -> Image? {
     return Image(uiImage: image)
 }
 
-/// The OldOS Notes control is one fused shape: a pointed leading cap overlaps
-/// a stretchable button body before SwiftUI lays out the label. Building that
-/// composite once avoids exposing a seam or treating the cap as a separate UI
-/// element.
+/// The source artwork already contains the pointed leading cap and rounded
+/// trailing end in one bitmap. Preserve that one-piece silhouette with
+/// cap-inset resizing rather than composing two separate image slices.
 private func oldOSNotesButtonBackground() -> Image? {
-    guard let cap = oldOSUIImage(named: "oldos-notes-back"),
-          let center = oldOSUIImage(named: "oldos-notes-button-center") else { return nil }
-
-    let size = CGSize(width: 62, height: 30)
-    let renderer = UIGraphicsImageRenderer(size: size)
-    let composite = renderer.image { _ in
-        center
-            .resizableImage(withCapInsets: UIEdgeInsets(top: 10, left: 5, bottom: 10, right: 5), resizingMode: .stretch)
-            .draw(in: CGRect(x: 14, y: 0, width: size.width - 14, height: size.height))
-        // A 5pt overlap is part of the asset slicing, not a second control.
-        cap.draw(in: CGRect(x: 0, y: 0, width: 19, height: size.height))
-    }
-    return Image(uiImage: composite)
+    oldOSImage(named: "oldos-notes-back-button")
 }
 
 /// Glossy capsule button in the style of pre-iOS7 default UIButtons: top highlight sheen + bevel border.
@@ -117,7 +104,7 @@ struct OldOSHeaderControl: View {
                     if let background = oldOSNotesButtonBackground() {
                         background
                             .resizable(
-                                capInsets: EdgeInsets(top: 10, leading: 19, bottom: 10, trailing: 5),
+                                capInsets: EdgeInsets(top: 8, leading: 26, bottom: 8, trailing: 10),
                                 resizingMode: .stretch
                             )
                     }
