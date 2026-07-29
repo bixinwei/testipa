@@ -1180,7 +1180,6 @@ final class LocalTextShareServer: ObservableObject {
 /// immediately when a replacement is created.
 final class PublicTextShareClient: ObservableObject {
     private static let apiBaseURL = URL(string: "https://helloipa-share.agile-fig-7406.chatgpt.site")!
-    private static let isGDCreateURL = URL(string: "https://is.gd/create.php")!
 
     @Published private(set) var shareURL: URL?
     @Published private(set) var expiresAt: String?
@@ -1203,10 +1202,6 @@ final class PublicTextShareClient: ObservableObject {
         let shortCode: String
         let shareUrl: String
         let expiresAt: String?
-    }
-
-    private struct IsGDResponsePayload: Decodable {
-        let shorturl: String?
     }
 
     func publish(text: String, images: [NoteImage], password: String) {
@@ -1280,7 +1275,7 @@ final class PublicTextShareClient: ObservableObject {
                 }
 
                 self.expiresAt = result.expiresAt
-                self.shorten(url)
+                self.shareURL = url
             }
         }.resume()
     }
@@ -1292,38 +1287,6 @@ final class PublicTextShareClient: ObservableObject {
         return (object["message"] as? String) ?? (object["error"] as? String)
     }
 
-    private func shorten(_ publicURL: URL) {
-        var components = URLComponents(url: Self.isGDCreateURL, resolvingAgainstBaseURL: false)
-        components?.queryItems = [
-            URLQueryItem(name: "format", value: "json"),
-            URLQueryItem(name: "url", value: publicURL.absoluteString)
-        ]
-
-        guard let requestURL = components?.url else {
-            shareURL = publicURL
-            errorMessage = "公网分享已生成，但无法创建短链接。"
-            return
-        }
-
-        URLSession.shared.dataTask(with: requestURL) { [weak self] data, response, error in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                guard error == nil,
-                      let http = response as? HTTPURLResponse,
-                      (200...299).contains(http.statusCode),
-                      let data,
-                      let result = try? JSONDecoder().decode(IsGDResponsePayload.self, from: data),
-                      let shortURLText = result.shorturl,
-                      let shortURL = URL(string: shortURLText) else {
-                    self.shareURL = publicURL
-                    self.errorMessage = "公网分享已生成，但 is.gd 短链接创建失败，请复制原地址。"
-                    return
-                }
-
-                self.shareURL = shortURL
-            }
-        }.resume()
-    }
 }
 
 struct SharedNoteDocument: Equatable {
@@ -1669,7 +1632,7 @@ struct ShareAddressSheet: View {
                                 .foregroundColor(Color.retroMetadata)
                         }
 
-                        Button("复制公网短链接") { copy(publicURL) }
+                        Button("复制公网地址") { copy(publicURL) }
                             .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.12, green: 0.34, blue: 0.67)))
                     }
 
@@ -1807,6 +1770,11 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
+            // Keep the existing Notes layout within the safe area.  This layer
+            // only becomes visible above it, behind the Dynamic Island/status
+            // area, so the title bar's own 60pt position is unchanged.
+            Color.retroLeatherDark
+                .ignoresSafeArea(.container, edges: .top)
             OldOSNotesRootView(
                 viewModel: viewModel,
                 showingDeleteConfirmation: $showingDeleteConfirmation
