@@ -368,6 +368,8 @@ struct StableTextEditor: UIViewRepresentable {
         textView.keyboardDismissMode = .interactive
         textView.alwaysBounceVertical = true
         textView.alwaysBounceHorizontal = false
+        textView.showsVerticalScrollIndicator = false
+        textView.showsHorizontalScrollIndicator = false
         textView.textContainer.widthTracksTextView = true
         textView.textContainer.lineBreakMode = .byWordWrapping
         textView.textContainerInset = UIEdgeInsets(top: 40, left: 28, bottom: 30, right: 3)
@@ -1327,7 +1329,10 @@ struct ContentView: View {
                 }
                 ZStack(alignment: .bottom) {
                     Color.retroPaper
-                    if let paper = oldOSImage(named: "oldos-notes-body") {
+                    // OldOS uses bodyMarginThin-568h for the editor: unlike
+                    // the list paper, this source image includes its left
+                    // ruled-page margin.
+                    if let paper = oldOSImage(named: "oldos-notes-body-margin") {
                         paper.resizable().scaledToFill().clipped()
                     }
                     StableTextEditor(
@@ -1339,13 +1344,21 @@ struct ContentView: View {
                         height: max(0, geometry.size.height - 60)
                     )
 
+                    // Match OldOS Notes.swift: a flexible spacer sits at both
+                    // edges and between every toolbar control, distributing
+                    // the four actions across the entire bottom bar.
                     HStack(spacing: 0) {
+                        Spacer(minLength: 0)
                         toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
+                        Spacer(minLength: 0)
                         toolButton(viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi", enabled: true) { viewModel.server.isSharingEnabled ? viewModel.stopSharing() : viewModel.startSharing() }
+                        Spacer(minLength: 0)
                         toolButton("oldos-trash", enabled: true) { showingDeleteConfirmation = true }
+                        Spacer(minLength: 0)
                         toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
+                        Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, 5)
+                    .frame(maxWidth: .infinity)
                     .padding(.bottom, 15)
                 }
                 .frame(width: geometry.size.width, height: max(0, geometry.size.height - 60))
