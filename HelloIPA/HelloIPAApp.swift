@@ -122,21 +122,18 @@ struct OldOSHeaderControl: View {
 struct RetroTitleBar<Trailing: View>: View {
     let title: String
     let truncatesTitle: Bool
-    let showsBuildLabel: Bool
-    let usesOverlayHighlight: Bool
+    let leading: AnyView?
     let trailing: () -> Trailing
 
     init(
         title: String,
         truncatesTitle: Bool = false,
-        showsBuildLabel: Bool = true,
-        usesOverlayHighlight: Bool = false,
+        leading: AnyView? = nil,
         @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }
     ) {
         self.title = title
         self.truncatesTitle = truncatesTitle
-        self.showsBuildLabel = showsBuildLabel
-        self.usesOverlayHighlight = usesOverlayHighlight
+        self.leading = leading
         self.trailing = trailing
     }
 
@@ -147,13 +144,6 @@ struct RetroTitleBar<Trailing: View>: View {
         let characters = Array(title)
         guard characters.count > 8 else { return title }
         return String(characters.prefix(8)) + "…"
-    }
-
-    private var buildLabel: String {
-        let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = info?["CFBundleVersion"] as? String ?? "?"
-        return "v\(version) (\(build))"
     }
 
     var body: some View {
@@ -179,24 +169,21 @@ struct RetroTitleBar<Trailing: View>: View {
             }
 
             VStack(spacing: 0) {
-                if !usesOverlayHighlight {
-                    Rectangle().fill(Color.white.opacity(0.35)).frame(height: 1)
-                }
+                Rectangle().fill(Color.white.opacity(0.35)).frame(height: 1)
                 Spacer()
                 Rectangle().fill(Color.black.opacity(0.45)).frame(height: 1)
             }
 
-            VStack(spacing: 0) {
-                Text(displayTitle)
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundColor(Color.white.opacity(0.95))
-                    .shadow(color: Color.black.opacity(0.6), radius: 0, x: 0, y: 1)
-                    .lineLimit(1)
-                if showsBuildLabel {
-                    Text(buildLabel)
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(Color.white.opacity(0.7))
-                }
+            Text(displayTitle)
+                .font(.system(size: 20, weight: .bold))
+                .foregroundColor(Color.white.opacity(0.95))
+                .shadow(color: Color.black.opacity(0.6), radius: 0, x: 0, y: 1)
+                .lineLimit(1)
+
+            if let leading = leading {
+                leading
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .padding(.leading, 14)
             }
 
             trailing()
@@ -204,16 +191,6 @@ struct RetroTitleBar<Trailing: View>: View {
                 .padding(.trailing, 14)
         }
         .frame(height: 52)
-        .overlay(
-            Group {
-                if usesOverlayHighlight {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.35))
-                        .frame(height: 1)
-                }
-            },
-            alignment: .top
-        )
         .background(
             LinearGradient(
                 colors: [Color.retroLeatherLight, Color.retroLeatherDark],
@@ -1161,22 +1138,17 @@ struct ShareAddressSheet: View {
 struct NotesListView: View {
     @ObservedObject var viewModel: AppViewModel
     private let dateFormatter: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US"); f.dateFormat = "M/d/yy"; return f }()
-    private var screenWidth: CGFloat { UIScreen.main.bounds.width }
 
     var body: some View {
         VStack(spacing: 0) {
-            RetroTitleBar(
-                title: "Notes (\(viewModel.notes.count))",
-                showsBuildLabel: false,
-                usesOverlayHighlight: true
-            ) {
+            RetroTitleBar(title: "Notes (\(viewModel.notes.count))") {
                 Button(action: viewModel.createNote) {
                     OldOSHeaderControl(title: nil, iconName: "oldos-toolbar-plus")
                         .frame(width: 44, height: 30)
                 }
                 .buttonStyle(PlainButtonStyle())
             }
-            .frame(width: screenWidth)
+            .frame(maxWidth: .infinity)
 
             ZStack {
                 Color.retroPaper
@@ -1210,19 +1182,20 @@ struct NotesListView: View {
                                 .foregroundColor(Color.retroLeatherDark)
                                 .padding(.vertical, 10)
                                 .padding(.horizontal, 18)
-                                .frame(width: screenWidth, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                                 .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
                             }
                             .buttonStyle(PlainButtonStyle())
                         }
                     }
-                    .frame(width: screenWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .frame(width: screenWidth)
+            .frame(maxWidth: .infinity)
             .frame(maxHeight: .infinity)
         }
-        .frame(width: screenWidth)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .background(Color.black.edgesIgnoringSafeArea(.top))
         .edgesIgnoringSafeArea(.bottom)
@@ -1252,22 +1225,23 @@ struct ContentView: View {
 
     private var editor: some View {
         VStack(spacing: 0) {
-            RetroTitleBar(title: viewModel.currentNote.title, truncatesTitle: true) {
+            RetroTitleBar(
+                title: viewModel.currentNote.title,
+                truncatesTitle: true,
+                leading: AnyView(
+                    Button(action: { viewModel.showingList = true }) {
+                        OldOSHeaderControl(title: "Notes", iconName: nil)
+                            .frame(width: 62, height: 30)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                )
+            ) {
                 Button(action: viewModel.createNote) {
                     OldOSHeaderControl(title: nil, iconName: "oldos-toolbar-plus")
                         .frame(width: 44, height: 30)
                 }
                 .buttonStyle(PlainButtonStyle())
             }
-            .overlay(
-                Button(action: { viewModel.showingList = true }) {
-                    OldOSHeaderControl(title: "Notes", iconName: nil)
-                        .frame(width: 62, height: 30)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .padding(.leading, 14),
-                alignment: .leading
-            )
             ZStack(alignment: .bottom) {
                 RuledPaperBackground(lineOffset: editorScrollOffset)
                 StableTextEditor(
