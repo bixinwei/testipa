@@ -99,31 +99,24 @@ struct OldOSHeaderControl: View {
             }
 
             if let title = title {
-                // The original Notes return button has a distinct rounded left
-                // cap and arrow; the stretchable center alone looks rectangular.
-                if let backCap = oldOSImage(named: "oldos-notes-back") {
-                    backCap
-                        .renderingMode(.original)
-                        .resizable()
-                        .frame(width: 19, height: 30)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                // The original Notes return button is a left cap followed by
+                // its label. Keep those two pieces in one horizontal layout
+                // so the cap can never overlap the first letter.
+                HStack(spacing: 0) {
+                    if let backCap = oldOSImage(named: "oldos-notes-back") {
+                        backCap
+                            .renderingMode(.original)
+                            .resizable()
+                            .frame(width: 19, height: 30)
+                    }
 
-                if let arrow = oldOSImage(named: "oldos-notes-back-arrow") {
-                    arrow
-                        .renderingMode(.original)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 11, height: 14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.leading, 5)
+                    Text(title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                        .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
+                        .frame(maxWidth: .infinity)
+                        .padding(.trailing, 3)
                 }
-
-                Text(title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white)
-                    .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
-                    .padding(.leading, 10)
             }
 
             if let iconName = iconName {
