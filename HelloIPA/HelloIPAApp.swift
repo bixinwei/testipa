@@ -30,13 +30,36 @@ private extension Color {
 
 /// OldOS artwork is copied into the app bundle as regular PNG files, not an
 /// asset catalog. Resolve the concrete file path on device.
-private func oldOSImage(named name: String) -> Image? {
+private func oldOSUIImage(named name: String) -> UIImage? {
     guard let path = Bundle.main.path(forResource: name, ofType: "png"),
           let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-          let image = UIImage(data: data, scale: 2) else {
-        return nil
-    }
+          let image = UIImage(data: data, scale: 2) else { return nil }
+    return image
+}
+
+private func oldOSImage(named name: String) -> Image? {
+    guard let image = oldOSUIImage(named: name) else { return nil }
     return Image(uiImage: image)
+}
+
+/// The OldOS Notes control is one fused shape: a pointed leading cap overlaps
+/// a stretchable button body before SwiftUI lays out the label. Building that
+/// composite once avoids exposing a seam or treating the cap as a separate UI
+/// element.
+private func oldOSNotesButtonBackground() -> Image? {
+    guard let cap = oldOSUIImage(named: "oldos-notes-back"),
+          let center = oldOSUIImage(named: "oldos-notes-button-center") else { return nil }
+
+    let size = CGSize(width: 62, height: 30)
+    let renderer = UIGraphicsImageRenderer(size: size)
+    let composite = renderer.image { _ in
+        center
+            .resizableImage(withCapInsets: UIEdgeInsets(top: 10, left: 5, bottom: 10, right: 5), resizingMode: .stretch)
+            .draw(in: CGRect(x: 14, y: 0, width: size.width - 14, height: size.height))
+        // A 5pt overlap is part of the asset slicing, not a second control.
+        cap.draw(in: CGRect(x: 0, y: 0, width: 19, height: size.height))
+    }
+    return Image(uiImage: composite)
 }
 
 /// Glossy capsule button in the style of pre-iOS7 default UIButtons: top highlight sheen + bevel border.
@@ -89,37 +112,34 @@ struct OldOSHeaderControl: View {
     let iconName: String?
 
     var body: some View {
-        ZStack {
-            if let buttonCenter = oldOSImage(named: "oldos-notes-button-center") {
-                buttonCenter
-                    .resizable(
-                        capInsets: EdgeInsets(top: 10, leading: 5, bottom: 10, trailing: 5),
-                        resizingMode: .stretch
-                    )
-            }
-
-            if let title = title {
-                // OldOS uses a dark, pointed left cap as part of the Notes
-                // control. It is a background slice, not the white arrow art.
-                HStack(spacing: 0) {
-                    if let backCap = oldOSImage(named: "oldos-notes-back") {
-                        backCap
-                            .renderingMode(.original)
-                            .resizable()
-                            .frame(width: 19, height: 30)
-                    }
-
-                    Text(title)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                        .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
-                        .frame(maxWidth: .infinity)
-                        .padding(.trailing, 2)
+        if let title = title {
+            ZStack {
+                if let background = oldOSNotesButtonBackground() {
+                    background
+                        .resizable(
+                            capInsets: EdgeInsets(top: 10, leading: 19, bottom: 10, trailing: 5),
+                            resizingMode: .stretch
+                        )
                 }
-            }
 
-            if let iconName = iconName {
-                if let icon = oldOSImage(named: iconName) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.white)
+                    .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
+                    .lineLimit(1)
+                    .padding(.leading, 4)
+            }
+        } else {
+            ZStack {
+                if let buttonCenter = oldOSImage(named: "oldos-notes-button-center") {
+                    buttonCenter
+                        .resizable(
+                            capInsets: EdgeInsets(top: 10, leading: 5, bottom: 10, trailing: 5),
+                            resizingMode: .stretch
+                        )
+                }
+
+                if let iconName = iconName, let icon = oldOSImage(named: iconName) {
                     icon
                         .renderingMode(.original)
                         .resizable()
