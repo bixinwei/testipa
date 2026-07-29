@@ -104,47 +104,48 @@ struct GlossyCapsuleButtonStyle: ButtonStyle {
     }
 }
 
-/// The Notes header controls use the stretchable dark center artwork. Keeping
-/// every control rectangular makes the list and editor title bars share one
-/// continuous silhouette.
+/// The Notes header controls use the original dark center artwork. The back
+/// control renders its pointed left cap and body as one fused background.
 struct OldOSHeaderControl: View {
     let title: String?
     let iconName: String?
 
     var body: some View {
-        if let title = title {
-            ZStack {
-                if let background = oldOSNotesButtonBackground() {
-                    background
-                        .resizable(
-                            capInsets: EdgeInsets(top: 10, leading: 19, bottom: 10, trailing: 5),
-                            resizingMode: .stretch
-                        )
-                }
+        Group {
+            if let title = title {
+                ZStack {
+                    if let background = oldOSNotesButtonBackground() {
+                        background
+                            .resizable(
+                                capInsets: EdgeInsets(top: 10, leading: 19, bottom: 10, trailing: 5),
+                                resizingMode: .stretch
+                            )
+                    }
 
-                Text(title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white)
-                    .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
-                    .lineLimit(1)
-                    .padding(.leading, 4)
-            }
-        } else {
-            ZStack {
-                if let buttonCenter = oldOSImage(named: "oldos-notes-button-center") {
-                    buttonCenter
-                        .resizable(
-                            capInsets: EdgeInsets(top: 10, leading: 5, bottom: 10, trailing: 5),
-                            resizingMode: .stretch
-                        )
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.white)
+                        .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
+                        .lineLimit(1)
+                        .padding(.leading, 4)
                 }
+            } else {
+                ZStack {
+                    if let buttonCenter = oldOSImage(named: "oldos-notes-button-center") {
+                        buttonCenter
+                            .resizable(
+                                capInsets: EdgeInsets(top: 10, leading: 5, bottom: 10, trailing: 5),
+                                resizingMode: .stretch
+                            )
+                    }
 
-                if let iconName = iconName, let icon = oldOSImage(named: iconName) {
-                    icon
-                        .renderingMode(.original)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 16, height: 17)
+                    if let iconName = iconName, let icon = oldOSImage(named: iconName) {
+                        icon
+                            .renderingMode(.original)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 16, height: 17)
+                    }
                 }
             }
         }
