@@ -1150,55 +1150,51 @@ struct NotesListView: View {
             }
             .frame(maxWidth: .infinity)
 
-            ZStack {
-                Color.retroPaper
-                if let paper = oldOSImage(named: "oldos-notes-body") {
-                    paper
-                        .resizable()
-                        .scaledToFill()
-                        .clipped()
-                }
-                ScrollView {
-                    VStack(spacing: 1) {
-                        ForEach(viewModel.notes) { note in
-                            Button(action: { viewModel.select(note) }) {
-                                HStack(spacing: 12) {
+            GeometryReader { geometry in
+                ZStack {
+                    Color.retroPaper
+                    if let paper = oldOSImage(named: "oldos-notes-body") {
+                        paper
+                            .resizable()
+                            .scaledToFill()
+                            .clipped()
+                    }
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(spacing: 1) {
+                            ForEach(viewModel.notes) { note in
+                                Button(action: { viewModel.select(note) }) {
+                                    HStack(spacing: 12) {
                                         Text(note.title)
                                             .font(.custom("MarkerFelt-Thin", size: 16))
                                             .lineLimit(1)
                                             .truncationMode(.tail)
-                                            .fixedSize(horizontal: false, vertical: true)
                                             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                                         Text(dateFormatter.string(from: note.modifiedAt))
                                             .font(.system(size: 17))
                                             .foregroundColor(.gray)
                                             .fixedSize()
-                                            .layoutPriority(1)
                                         Image(systemName: "chevron.right")
                                             .font(.system(size: 22, weight: .bold))
                                             .foregroundColor(Color.retroLeatherDark.opacity(0.7))
-                                            .layoutPriority(1)
+                                    }
+                                    .foregroundColor(Color.retroLeatherDark)
+                                    .padding(.vertical, 10)
+                                    .padding(.horizontal, 18)
+                                    .frame(width: geometry.size.width, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                    .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
                                 }
-                                .foregroundColor(Color.retroLeatherDark)
-                                .padding(.vertical, 10)
-                                .padding(.horizontal, 18)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
-                                .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
+                                .buttonStyle(PlainButtonStyle())
                             }
-                            .buttonStyle(PlainButtonStyle())
                         }
+                        .frame(width: geometry.size.width, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .frame(maxWidth: .infinity)
             .frame(maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        .background(Color.black.edgesIgnoringSafeArea(.top))
-        .edgesIgnoringSafeArea(.bottom)
     }
 }
 
@@ -1209,12 +1205,14 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
+            Color.black.edgesIgnoringSafeArea(.all)
             if viewModel.showingList { NotesListView(viewModel: viewModel) } else { editor }
             if viewModel.showingShareSheet { ShareAddressSheet(server: viewModel.server) { viewModel.showingShareSheet = false } }
         }
         .onAppear { viewModel.server.updateSharedText(viewModel.text) }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in viewModel.persistText() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in viewModel.persistText() }
+        .edgesIgnoringSafeArea(.bottom)
         .actionSheet(isPresented: $showingDeleteConfirmation) {
             ActionSheet(title: Text("Delete Note?"), buttons: [
                 .destructive(Text("Delete Note"), action: viewModel.deleteSelectedNote),
@@ -1279,8 +1277,7 @@ struct ContentView: View {
             .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black.edgesIgnoringSafeArea(.top))
-        .edgesIgnoringSafeArea(.bottom)
+        .clipped()
     }
 
     private func toolButton(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
@@ -1339,6 +1336,16 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else { return }
 
         let window = UIWindow(windowScene: windowScene)
+#if DEBUG
+        // Used only by the simulator smoke-test workflow to capture each
+        // screen without relying on fragile coordinate taps.
+        if CommandLine.arguments.contains("-HelloIPA.ShowDetail") {
+            viewModel.showingList = false
+        }
+        if CommandLine.arguments.contains("-HelloIPA.ShowShare") {
+            viewModel.showingShareSheet = true
+        }
+#endif
         window.rootViewController = ImmersiveHostingController(rootView: ContentView(viewModel: viewModel))
         self.window = window
         window.makeKeyAndVisible()

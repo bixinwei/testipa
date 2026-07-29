@@ -28,3 +28,58 @@ jobs:
           path: |
             build-output/HelloIPA.ipa
           if-no-files-found: error
+
+  simulator-smoke-test:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show available iPhone 16 Pro Max runtime
+        run: xcrun simctl list devices available | grep -F "iPhone 16 Pro Max"
+
+      - name: Build simulator app
+        run: |
+          xcodebuild \
+            -project HelloIPA.xcodeproj \
+            -scheme HelloIPA \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro Max' \
+            -derivedDataPath build/Simulator \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Capture home, detail, and share title bars
+        run: |
+          set -euo pipefail
+          DEVICE_NAME="iPhone 16 Pro Max"
+          BUNDLE_ID="com.example.helloipa"
+          APP_PATH="$(find build/Simulator -type d -name HelloIPA.app -print -quit)"
+          mkdir -p build/simulator-screenshots
+
+          xcrun simctl boot "$DEVICE_NAME" 2>/dev/null || true
+          xcrun simctl bootstatus "$DEVICE_NAME" -b
+          xcrun simctl install "$DEVICE_NAME" "$APP_PATH"
+
+          xcrun simctl launch "$DEVICE_NAME" "$BUNDLE_ID"
+          sleep 2
+          xcrun simctl io "$DEVICE_NAME" screenshot build/simulator-screenshots/home.png
+
+          xcrun simctl terminate "$DEVICE_NAME" "$BUNDLE_ID" || true
+          xcrun simctl launch "$DEVICE_NAME" "$BUNDLE_ID" -HelloIPA.ShowDetail
+          sleep 2
+          xcrun simctl io "$DEVICE_NAME" screenshot build/simulator-screenshots/detail.png
+
+          xcrun simctl terminate "$DEVICE_NAME" "$BUNDLE_ID" || true
+          xcrun simctl launch "$DEVICE_NAME" "$BUNDLE_ID" -HelloIPA.ShowShare
+          sleep 2
+          xcrun simctl io "$DEVICE_NAME" screenshot build/simulator-screenshots/share.png
+
+      - name: Upload simulator screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: HelloIPA-iPhone-16-Pro-Max-screenshots
+          path: build/simulator-screenshots
+          if-no-files-found: error
