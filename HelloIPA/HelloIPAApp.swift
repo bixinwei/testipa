@@ -1176,7 +1176,8 @@ final class LocalTextShareServer: ObservableObject {
 }
 
 /// Client for the separately hosted, password-protected public Notes share.
-/// The service owns the expiry timer, so a device clock cannot extend a link.
+/// The service keeps only the latest link active and revokes prior links when
+/// a replacement is created.
 final class PublicTextShareClient: ObservableObject {
     private static let apiBaseURL = URL(string: "https://helloipa-share.agile-fig-7406.chatgpt.site")!
 
@@ -1200,7 +1201,7 @@ final class PublicTextShareClient: ObservableObject {
     private struct ResponsePayload: Decodable {
         let shortCode: String
         let shareUrl: String
-        let expiresAt: String
+        let expiresAt: String?
     }
 
     func publish(text: String, images: [NoteImage], password: String) {
@@ -1555,7 +1556,7 @@ struct ShareAddressSheet: View {
                         .font(.custom("Helvetica Neue Bold", size: 18))
                         .foregroundColor(Color.retroMetadata)
 
-                    Text("设置访问密码后生成公网短链接；链接固定 10 分钟有效，打开时必须输入密码。")
+                    Text("每次创建都会立即使旧公网链接失效；当前链接长期有效，打开时必须输入密码。")
                         .font(.custom("Helvetica Neue Regular", size: 15))
                         .foregroundColor(Color.retroMetadata)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1617,6 +1618,10 @@ struct ShareAddressSheet: View {
 
                         if let expiresAt = publicShare.expiresAt {
                             Text("有效期至：\(expiresAt)")
+                                .font(.footnote)
+                                .foregroundColor(Color.retroMetadata)
+                        } else {
+                            Text("创建新链接后，当前链接将立即失效。")
                                 .font(.footnote)
                                 .foregroundColor(Color.retroMetadata)
                         }
