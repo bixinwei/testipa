@@ -1185,8 +1185,6 @@ final class PublicTextShareClient: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isPublishing = false
 
-    private var shortCode: String?
-
     private struct ImagePayload: Encodable {
         let dataBase64: String
         let mimeType: String
@@ -1194,7 +1192,6 @@ final class PublicTextShareClient: ObservableObject {
     }
 
     private struct RequestPayload: Encodable {
-        let shortCode: String?
         let text: String
         let password: String
         let images: [ImagePayload]
@@ -1233,7 +1230,7 @@ final class PublicTextShareClient: ObservableObject {
 
         do {
             request.httpBody = try JSONEncoder().encode(
-                RequestPayload(shortCode: shortCode, text: text, password: trimmedPassword, images: payloadImages)
+                RequestPayload(text: text, password: trimmedPassword, images: payloadImages)
             )
         } catch {
             errorMessage = "无法准备公网分享内容。"
@@ -1263,15 +1260,7 @@ final class PublicTextShareClient: ObservableObject {
                     case 413:
                         self.errorMessage = "图片或正文过大，公网服务拒绝了本次上传。"
                     case 401, 403:
-                        self.errorMessage = "访问密码不正确，无法更新已有公网分享。"
-                    case 410:
-                        self.shortCode = nil
-                        self.shareURL = nil
-                        self.expiresAt = nil
-                        // The service deliberately rejects expired short codes.
-                        // Retrying once without a code creates a new 10-minute
-                        // share instead of asking the user to tap again.
-                        self.publish(text: text, images: images, password: trimmedPassword)
+                        self.errorMessage = "公网服务拒绝了本次创建请求（HTTP \(http.statusCode)）。"
                     default:
                         self.errorMessage = serverMessage ?? "公网服务返回错误（HTTP \(http.statusCode)）。"
                     }
@@ -1284,7 +1273,6 @@ final class PublicTextShareClient: ObservableObject {
                     return
                 }
 
-                self.shortCode = result.shortCode
                 self.shareURL = url
                 self.expiresAt = result.expiresAt
             }
@@ -1584,7 +1572,7 @@ struct ShareAddressSheet: View {
                     Button(action: { publishPublicShare(publicPassword) }) {
                         HStack {
                             if publicShare.isPublishing { ActivityIndicator() }
-                            Text(publicShare.shareURL == nil ? "创建公网分享" : "更新公网分享")
+                            Text("创建新的公网分享")
                         }
                         .font(.custom("Helvetica Neue Bold", size: 17))
                         .frame(maxWidth: .infinity)
