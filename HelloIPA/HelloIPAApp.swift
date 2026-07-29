@@ -99,10 +99,23 @@ struct OldOSHeaderControl: View {
             }
 
             if let title = title {
-                Text(title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white)
-                    .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
+                // OldOS uses a dark, pointed left cap as part of the Notes
+                // control. It is a background slice, not the white arrow art.
+                HStack(spacing: 0) {
+                    if let backCap = oldOSImage(named: "oldos-notes-back") {
+                        backCap
+                            .renderingMode(.original)
+                            .resizable()
+                            .frame(width: 19, height: 30)
+                    }
+
+                    Text(title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                        .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
+                        .frame(maxWidth: .infinity)
+                        .padding(.trailing, 2)
+                }
             }
 
             if let iconName = iconName {
