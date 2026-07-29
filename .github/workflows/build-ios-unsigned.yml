@@ -44,14 +44,16 @@ jobs:
           echo "Available device types:"
           xcrun simctl list devicetypes
 
-          DEVICE_TYPE_ID="$(xcrun simctl list devicetypes | grep -F 'iPhone 16 Pro Max (' | head -n 1 | awk -F'[()]' '{print $2}')"
-          RUNTIME_ID="$(xcrun simctl list runtimes available | grep -F 'com.apple.CoreSimulator.SimRuntime.iOS-' | tail -n 1 | awk -F' - ' '{print $NF}')"
+          DEVICE_TYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro-Max"
+          RUNTIME_ID="$(xcrun simctl list runtimes available | grep -F 'com.apple.CoreSimulator.SimRuntime.iOS-' | tail -n 1 | awk '{print $NF}')"
+          echo "Selected device type: $DEVICE_TYPE_ID"
+          echo "Selected runtime: $RUNTIME_ID"
           if [[ -z "$DEVICE_TYPE_ID" || -z "$RUNTIME_ID" ]]; then
             echo "Could not find an iPhone 16 Pro Max device type or an iOS runtime" >&2
             exit 1
           fi
 
-          DEVICE_UDID="$(xcrun simctl list devices available | grep -F 'iPhone 16 Pro Max (' | head -n 1 | awk -F'[()]' '{print $2}')"
+          DEVICE_UDID="$(xcrun simctl list devices available | awk -F'[()]' '/iPhone 16 Pro Max \(/ {print $2; exit}')"
           if [[ -z "$DEVICE_UDID" ]]; then
             DEVICE_UDID="$(xcrun simctl create 'iPhone 16 Pro Max' "$DEVICE_TYPE_ID" "$RUNTIME_ID")"
             echo "Created iPhone 16 Pro Max ($DEVICE_UDID) using $RUNTIME_ID"
