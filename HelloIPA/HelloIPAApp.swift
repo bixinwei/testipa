@@ -1468,6 +1468,10 @@ final class AppViewModel: ObservableObject {
 
     private func updateSelectedNote() {
         guard let index = notes.firstIndex(where: { $0.id == selectedNoteID }) else { return }
+        // Selecting a row assigns its existing text back into the editor.  That
+        // is not an edit, so it must not turn the note's displayed modification
+        // time into the current time.
+        guard notes[index].text != text else { return }
         notes[index].text = text
         notes[index].modifiedAt = Date()
         persistNotes()

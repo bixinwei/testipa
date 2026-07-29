@@ -465,14 +465,14 @@ struct OldOSNotesDestinationView: View {
 
     private var metadata: OldOSDestinationMetadata {
         let date = viewModel.currentNote.modifiedAt
-        let days = Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0
         let relativeDate: String
-        if days == 0 {
+        if Calendar.current.isDateInToday(date) {
             relativeDate = "Today"
-        } else if days == 1 {
-            relativeDate = "1 day ago"
         } else {
-            relativeDate = "\(days) days ago"
+            let weekdayFormatter = DateFormatter()
+            weekdayFormatter.locale = Locale(identifier: "en_US")
+            weekdayFormatter.dateFormat = "EEEE"
+            relativeDate = weekdayFormatter.string(from: date)
         }
 
         let formatter = DateFormatter()
