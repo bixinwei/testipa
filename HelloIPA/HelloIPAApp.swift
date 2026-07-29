@@ -310,8 +310,10 @@ final class OldOSLinedTextView: UITextView {
         context.beginPath()
         context.setStrokeColor(verticalLineColor.cgColor)
         let marginX = bounds.minX + textContainerInset.left - 3 / scale
-        context.move(to: CGPoint(x: marginX, y: bounds.minY))
-        context.addLine(to: CGPoint(x: marginX, y: bounds.minY + bounds.height))
+        for x in [marginX, marginX + 2 / scale] {
+            context.move(to: CGPoint(x: x, y: bounds.minY))
+            context.addLine(to: CGPoint(x: x, y: bounds.minY + bounds.height))
+        }
         context.strokePath()
     }
 
@@ -1320,6 +1322,7 @@ struct ContentView: View {
 
     private var editor: some View {
         GeometryReader { geometry in
+            let toolbarHeight = toolbarButtonHeight + toolbarBottomInset
             VStack(spacing: 0) {
                 RetroTitleBar(
                     title: viewModel.currentNote.title,
@@ -1338,7 +1341,7 @@ struct ContentView: View {
                     }
                     .buttonStyle(PlainButtonStyle())
                 }
-                ZStack(alignment: .bottom) {
+                ZStack {
                     Color.retroPaper
                     // OldOS uses bodyMarginThin-568h for the editor: unlike
                     // the list paper, this source image includes its left
@@ -1352,11 +1355,16 @@ struct ContentView: View {
                     )
                     .frame(
                         width: geometry.size.width,
-                        height: max(0, geometry.size.height - 60)
+                        height: max(0, geometry.size.height - 60 - toolbarHeight)
                     )
+                }
+                .frame(width: geometry.size.width, height: max(0, geometry.size.height - 60 - toolbarHeight))
+                .clipped()
 
-                    // The user-specified physical-pixel margins are
-                    // converted to points for the active Retina display.
+                // A separate bottom region reserves screen space for controls;
+                // the editor above cannot scroll beneath or be covered by it.
+                ZStack(alignment: .bottom) {
+                    Color.retroPaper
                     HStack(spacing: 0) {
                         toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
                         Spacer(minLength: 0)
@@ -1370,7 +1378,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.bottom, toolbarBottomInset)
                 }
-                .frame(width: geometry.size.width, height: max(0, geometry.size.height - 60))
+                .frame(width: geometry.size.width, height: toolbarHeight)
                 .clipped()
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
@@ -1429,6 +1437,8 @@ struct ContentView: View {
     private var toolbarBottomInset: CGFloat {
         160 / UIScreen.main.scale
     }
+
+    private var toolbarButtonHeight: CGFloat { 44 }
 }
 
 /// Keeps the note surface continuous at the screen edges, without system white bars.
