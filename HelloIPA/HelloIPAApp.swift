@@ -306,6 +306,18 @@ final class OldOSLinedTextView: UITextView {
 
     override var font: UIFont? { didSet { setNeedsDisplay() } }
     override var textContainerInset: UIEdgeInsets { didSet { setNeedsDisplay() } }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // UIKit's text container is independent of the SwiftUI wrapper's
+        // layout proposal. Keep it tied to the actual rendered width so long
+        // text can wrap but can never widen the note surface.
+        textContainer.widthTracksTextView = true
+        let availableWidth = max(0, bounds.width - textContainerInset.left - textContainerInset.right)
+        if textContainer.size.width != availableWidth {
+            textContainer.size = CGSize(width: availableWidth, height: .greatestFiniteMagnitude)
+        }
+    }
 }
 
 struct StableTextEditor: UIViewRepresentable {
@@ -355,6 +367,9 @@ struct StableTextEditor: UIViewRepresentable {
         textView.isSelectable = true
         textView.keyboardDismissMode = .interactive
         textView.alwaysBounceVertical = true
+        textView.alwaysBounceHorizontal = false
+        textView.textContainer.widthTracksTextView = true
+        textView.textContainer.lineBreakMode = .byWordWrapping
         textView.textContainerInset = UIEdgeInsets(top: 40, left: 28, bottom: 30, right: 3)
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
@@ -1318,6 +1333,10 @@ struct ContentView: View {
                     StableTextEditor(
                         text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 }),
                         metadata: editorMetadata
+                    )
+                    .frame(
+                        width: geometry.size.width,
+                        height: max(0, geometry.size.height - 60)
                     )
 
                     HStack(spacing: 0) {
