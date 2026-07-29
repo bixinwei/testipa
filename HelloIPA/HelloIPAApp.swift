@@ -1150,45 +1150,45 @@ struct NotesListView: View {
             }
             .frame(maxWidth: .infinity)
 
-            GeometryReader { geometry in
-                ZStack {
-                    Color.retroPaper
-                    if let paper = oldOSImage(named: "oldos-notes-body") {
-                        paper
-                            .resizable()
-                            .scaledToFill()
-                            .clipped()
-                    }
-                    ScrollView(.vertical, showsIndicators: true) {
-                        VStack(spacing: 1) {
-                            ForEach(viewModel.notes) { note in
-                                Button(action: { viewModel.select(note) }) {
-                                    HStack(spacing: 12) {
-                                        Text(note.title)
-                                            .font(.custom("MarkerFelt-Thin", size: 16))
-                                            .lineLimit(1)
-                                            .truncationMode(.tail)
-                                            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                                        Text(dateFormatter.string(from: note.modifiedAt))
-                                            .font(.system(size: 17))
-                                            .foregroundColor(.gray)
-                                            .fixedSize()
-                                        Image(systemName: "chevron.right")
-                                            .font(.system(size: 22, weight: .bold))
-                                            .foregroundColor(Color.retroLeatherDark.opacity(0.7))
-                                    }
-                                    .foregroundColor(Color.retroLeatherDark)
-                                    .padding(.vertical, 10)
-                                    .padding(.horizontal, 18)
-                                    .frame(width: geometry.size.width, alignment: .leading)
-                                    .contentShape(Rectangle())
-                                    .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
+            ZStack {
+                Color.retroPaper
+                if let paper = oldOSImage(named: "oldos-notes-body") {
+                    paper
+                        .resizable()
+                        .scaledToFill()
+                        .clipped()
+                }
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(spacing: 1, alignment: .leading) {
+                        ForEach(viewModel.notes) { note in
+                            Button(action: { viewModel.select(note) }) {
+                                HStack(spacing: 12) {
+                                    Text(note.title)
+                                        .font(.custom("MarkerFelt-Thin", size: 16))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                                    Text(dateFormatter.string(from: note.modifiedAt))
+                                        .font(.system(size: 17))
+                                        .foregroundColor(.gray)
+                                        .fixedSize()
+                                        .layoutPriority(1)
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 22, weight: .bold))
+                                        .foregroundColor(Color.retroLeatherDark.opacity(0.7))
+                                        .layoutPriority(1)
                                 }
-                                .buttonStyle(PlainButtonStyle())
+                                .foregroundColor(Color.retroLeatherDark)
+                                .padding(.vertical, 10)
+                                .padding(.horizontal, 18)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                                .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
                             }
+                            .buttonStyle(PlainButtonStyle())
                         }
-                        .frame(width: geometry.size.width, alignment: .leading)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .frame(maxHeight: .infinity)
