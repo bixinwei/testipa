@@ -42,39 +42,6 @@ private func oldOSImage(named name: String) -> Image? {
     return Image(uiImage: image)
 }
 
-/// OldOS Notes provides a pointed left cap and a stretchable center as alpha
-/// masks, plus the brown leather top-bar artwork. Paint the *same* leather
-/// texture through their union so the finished control is one continuous
-/// material rather than two visibly joined controls.
-private func oldOSNotesButtonBackground() -> Image? {
-    guard let cap = oldOSUIImage(named: "oldos-notes-back"),
-          let center = oldOSUIImage(named: "oldos-notes-button-center"),
-          let leather = oldOSUIImage(named: "oldos-notes-topbar") else { return nil }
-
-    let size = CGSize(width: 62, height: 30)
-    let format = UIGraphicsImageRendererFormat()
-    format.scale = 2
-    format.opaque = false
-
-    let capRect = CGRect(x: 0, y: 0, width: cap.size.width, height: size.height)
-    let centerRect = CGRect(x: cap.size.width - 5, y: 0, width: size.width - cap.size.width + 5, height: size.height)
-    let silhouette = UIGraphicsImageRenderer(size: size, format: format).image { _ in
-        cap.draw(in: capRect)
-        center.draw(in: centerRect)
-    }
-
-    let composite = UIGraphicsImageRenderer(size: size, format: format).image { rendererContext in
-        let context = rendererContext.cgContext
-        let leatherOrigin = CGPoint(x: -32, y: -7)
-
-        context.saveGState()
-        context.clip(to: CGRect(origin: .zero, size: size), mask: silhouette.cgImage!)
-        leather.draw(at: leatherOrigin)
-        context.restoreGState()
-    }
-    return Image(uiImage: composite)
-}
-
 /// Glossy capsule button in the style of pre-iOS7 default UIButtons: top highlight sheen + bevel border.
 struct GlossyCapsuleButtonStyle: ButtonStyle {
     let baseColor: Color
@@ -117,8 +84,8 @@ struct GlossyCapsuleButtonStyle: ButtonStyle {
     }
 }
 
-/// The Notes header controls use the original dark center artwork. The back
-/// control renders its pointed left cap and body as one fused background.
+/// Match OldOS Notes.swift: the NotesBack asset is itself the complete
+/// semi-transparent, 3-part horizontally stretchable return-button image.
 struct OldOSHeaderControl: View {
     let title: String?
     let iconName: String?
@@ -127,20 +94,21 @@ struct OldOSHeaderControl: View {
         Group {
             if let title = title {
                 ZStack {
-                    if let background = oldOSNotesButtonBackground() {
+                    if let background = oldOSImage(named: "oldos-notes-back") {
                         background
                             .resizable(
-                                capInsets: EdgeInsets(top: 10, leading: 19, bottom: 10, trailing: 5),
+                                capInsets: EdgeInsets(top: 0, leading: 13, bottom: 0, trailing: 5.5),
                                 resizingMode: .stretch
                             )
                     }
 
                     Text(title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.custom("Helvetica Neue Bold", size: 13))
                         .foregroundColor(.white)
-                        .shadow(color: .black.opacity(0.7), radius: 0, x: 0, y: 1)
+                        .shadow(color: .black.opacity(0.45), radius: 0, x: 0, y: -0.6)
                         .lineLimit(1)
-                        .padding(.leading, 4)
+                        .padding(.leading, 5)
+                        .offset(y: -1.1)
                 }
             } else {
                 ZStack {
@@ -162,7 +130,7 @@ struct OldOSHeaderControl: View {
                 }
             }
         }
-        .frame(height: 30)
+        .frame(height: title == nil ? 32 : 33)
     }
 }
 
@@ -203,29 +171,23 @@ struct RetroTitleBar<Trailing: View>: View {
                     .clipped()
             }
 
-            VStack(spacing: 0) {
-                Rectangle().fill(Color.white.opacity(0.22)).frame(height: 1)
-                Spacer()
-                Rectangle().fill(Color.black.opacity(0.34)).frame(height: 1)
-            }
-
             Text(displayTitle)
-                .font(.system(size: 20, weight: .bold))
-                .foregroundColor(Color.white.opacity(0.95))
-                .shadow(color: Color.black.opacity(0.6), radius: 0, x: 0, y: 1)
+                .font(.custom("Helvetica Neue Bold", size: 22))
+                .foregroundColor(.white)
+                .shadow(color: Color.black.opacity(0.21), radius: 0, x: 0, y: -1)
                 .lineLimit(1)
 
             if let leading = leading {
                 leading
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                    .padding(.leading, 14)
+                    .padding(.leading, 5)
             }
 
             trailing()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-                .padding(.trailing, 14)
+                .padding(.trailing, 5)
         }
-        .frame(height: 52)
+        .frame(height: 60)
         .background(
             LinearGradient(
                 colors: [Color.retroLeatherLight, Color.retroLeatherDark],
@@ -287,25 +249,47 @@ struct ActivityIndicator: UIViewRepresentable {
     }
 }
 
+/// Swift port of OldOS/TextView/DALinedTextView.m. Lines belong to the scrolling
+/// UITextView, so they stay registered with the glyph baselines while editing.
+final class OldOSLinedTextView: UITextView {
+    private let horizontalLineColor = UIColor(red: 78/255, green: 90/255, blue: 130/255, alpha: 0.4)
+
+    override func draw(_ rect: CGRect) {
+        super.draw(rect)
+        guard let context = UIGraphicsGetCurrentContext(), let font = font else { return }
+        let scale = window?.screen.scale ?? UIScreen.main.scale
+        context.setLineWidth(3 / scale)
+        context.setStrokeColor(horizontalLineColor.cgColor)
+        context.beginPath()
+
+        let baseOffset = font.descender + 40
+        let factor = font.pointSize * 0.015
+        let correctedOffset = contentOffset.y - (contentOffset.y / font.lineHeight) * factor
+        let firstLine = max(1, Int(correctedOffset / font.lineHeight))
+        let lastLine = Int(ceil((contentOffset.y + bounds.height) / font.lineHeight))
+        for line in firstLine...max(firstLine, lastLine) {
+            let y = round((baseOffset + (font.lineHeight + factor) * CGFloat(line)) * scale) / scale
+            context.move(to: CGPoint(x: bounds.minX, y: y))
+            context.addLine(to: CGPoint(x: bounds.maxX, y: y))
+        }
+        context.strokePath()
+    }
+
+    override var font: UIFont? { didSet { setNeedsDisplay() } }
+    override var textContainerInset: UIEdgeInsets { didSet { setNeedsDisplay() } }
+}
+
 struct StableTextEditor: UIViewRepresentable {
     @Binding var text: String
     @Binding var scrollOffset: CGFloat
 
-    // Match the handwritten face used for each title in the Notes list.
-    private static let noteFont = UIFont(name: "MarkerFelt-Wide", size: 16) ?? .systemFont(ofSize: 16, weight: .semibold)
-    private static let noteTextColor = UIColor(red: 0.10, green: 0.07, blue: 0.04, alpha: 1)
-    private static let noteLineHeight: CGFloat = 26
+    private static let noteFont = UIFont(name: "Noteworthy-Bold", size: 19) ?? .systemFont(ofSize: 19, weight: .bold)
+    private static let noteTextColor = UIColor.black
 
     private static func noteAttributes() -> [NSAttributedString.Key: Any] {
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.minimumLineHeight = noteLineHeight
-        paragraphStyle.maximumLineHeight = noteLineHeight
-        paragraphStyle.lineBreakMode = .byWordWrapping
-
         return [
             .font: noteFont,
-            .foregroundColor: noteTextColor,
-            .paragraphStyle: paragraphStyle
+            .foregroundColor: noteTextColor
         ]
     }
 
@@ -328,8 +312,8 @@ struct StableTextEditor: UIViewRepresentable {
         Coordinator(text: $text, scrollOffset: $scrollOffset)
     }
 
-    func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView()
+    func makeUIView(context: Context) -> OldOSLinedTextView {
+        let textView = OldOSLinedTextView()
         textView.delegate = context.coordinator
         // A transparent UIKit view must not declare itself opaque. Otherwise the
         // compositor is allowed to substitute a black backing store in Dark Mode.
@@ -342,19 +326,14 @@ struct StableTextEditor: UIViewRepresentable {
         textView.isSelectable = true
         textView.keyboardDismissMode = .interactive
         textView.alwaysBounceVertical = true
-        textView.contentInset = .zero
-        textView.scrollIndicatorInsets = .zero
-        // Shift each glyph run down by half the remaining leading so it sits
-        // in the middle of its 26pt ruled-paper row rather than on a rule.
-        textView.textContainerInset = UIEdgeInsets(top: 13, left: 10, bottom: 14, right: 10)
-        textView.textContainer.lineFragmentPadding = 0
+        textView.textContainerInset = UIEdgeInsets(top: 40, left: 28, bottom: 30, right: 3)
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
         textView.attributedText = Self.styledText(text)
         return textView
     }
 
-    func updateUIView(_ textView: UITextView, context: Context) {
+    func updateUIView(_ textView: OldOSLinedTextView, context: Context) {
         // Keep the paper visible when the device changes appearance while the
         // editor is on screen.
         textView.isOpaque = false
@@ -1194,33 +1173,34 @@ struct NotesListView: View {
                             .scaledToFill()
                             .clipped()
                     }
-                    ScrollView(.vertical, showsIndicators: true) {
-                        VStack(spacing: 1) {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(spacing: 0) {
+                            Spacer().frame(height: 5)
                             ForEach(viewModel.notes) { note in
                                 Button(action: { viewModel.select(note) }) {
                                     HStack(spacing: 12) {
                                         Text(note.title)
-                                            .font(.custom("MarkerFelt-Thin", size: 16))
+                                            .font(.custom("Noteworthy-Bold", size: 18))
                                             .lineLimit(1)
                                             .truncationMode(.tail)
                                             .fixedSize(horizontal: false, vertical: true)
                                             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                                         Text(dateFormatter.string(from: note.modifiedAt))
-                                            .font(.system(size: 17))
-                                            .foregroundColor(.gray)
+                                            .font(.custom("Helvetica Neue Regular", size: 14))
+                                            .foregroundColor(Color(red: 99/255, green: 115/255, blue: 142/255))
                                             .fixedSize()
                                             .layoutPriority(1)
-                                        Image(systemName: "chevron.right")
-                                            .font(.system(size: 22, weight: .bold))
-                                            .foregroundColor(Color.retroLeatherDark.opacity(0.7))
+                                        if let next = oldOSImage(named: "oldos-notes-next") {
+                                            next.renderingMode(.original).resizable().scaledToFit().frame(width: 15, height: 22)
+                                        }
                                             .layoutPriority(1)
                                     }
-                                    .foregroundColor(Color.retroLeatherDark)
-                                    .padding(.vertical, 10)
-                                    .padding(.horizontal, 18)
+                                    .foregroundColor(Color(red: 160/255, green: 92/255, blue: 62/255))
+                                    .padding(.horizontal, 12)
                                     .frame(width: geometry.size.width, alignment: .leading)
                                     .contentShape(Rectangle())
-                                    .overlay(Rectangle().fill(Color.retroPaperLine.opacity(0.6)).frame(height: 1), alignment: .bottom)
+                                    .frame(height: 44)
+                                    .overlay(Rectangle().fill(Color(red: 78/255, green: 90/255, blue: 130/255).opacity(0.3)).frame(height: 1), alignment: .bottom)
                                 }
                                 .buttonStyle(PlainButtonStyle())
                             }
@@ -1269,7 +1249,7 @@ struct ContentView: View {
                 leading: AnyView(
                     Button(action: { viewModel.showingList = true }) {
                         OldOSHeaderControl(title: "Notes", iconName: nil)
-                            .frame(width: 62, height: 30)
+                            .frame(width: 55, height: 33)
                     }
                     .buttonStyle(PlainButtonStyle())
                 )
@@ -1281,25 +1261,25 @@ struct ContentView: View {
                 .buttonStyle(PlainButtonStyle())
             }
             ZStack(alignment: .bottom) {
-                RuledPaperBackground(lineOffset: editorScrollOffset)
+                Color.retroPaper
+                if let paper = oldOSImage(named: "oldos-notes-body") {
+                    paper.resizable().scaledToFill().clipped()
+                }
                 StableTextEditor(
                     text: Binding(get: { viewModel.text }, set: { viewModel.text = $0 }),
                     scrollOffset: $editorScrollOffset
                 )
-                    .padding(.leading, 40)
-                    .padding(.top, 42)
-                    .padding(.bottom, 92)
 
                 HStack {
                     Text("Today")
                     Spacer()
                     Text(editorDate)
                 }
-                    .font(.custom("MarkerFelt-Wide", size: 16))
-                    .foregroundColor(Color.retroMetadata.opacity(0.86))
+                    .font(.custom("Helvetica Neue Bold", size: 14))
+                    .foregroundColor(Color(red: 161/255, green: 93/255, blue: 68/255))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(.leading, 40)
-                    .padding(.trailing, 34)
+                    .padding(.leading, 32)
+                    .padding(.trailing, 8)
                     .padding(.top, 10)
                     .allowsHitTesting(false)
                     .offset(y: -editorScrollOffset)
@@ -1311,7 +1291,7 @@ struct ContentView: View {
                     toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
                 }
                 .padding(.horizontal, 5)
-                .padding(.bottom, 26)
+                .padding(.bottom, 15)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
