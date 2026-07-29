@@ -1191,9 +1191,8 @@ struct NotesListView: View {
                                             .fixedSize()
                                             .layoutPriority(1)
                                         if let next = oldOSImage(named: "oldos-notes-next") {
-                                            next.renderingMode(.original).resizable().scaledToFit().frame(width: 15, height: 22)
+                                            next.renderingMode(.original).resizable().scaledToFit().frame(width: 15, height: 22).layoutPriority(1)
                                         }
-                                            .layoutPriority(1)
                                     }
                                     .foregroundColor(Color(red: 160/255, green: 92/255, blue: 62/255))
                                     .padding(.horizontal, 12)
