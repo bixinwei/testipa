@@ -113,7 +113,6 @@ struct OldOSNotesRootView: View {
                 OldOSNotesTitleBar(
                     title: viewModel.showingList ? "Notes (\(viewModel.notes.filter { !$0.text.isEmpty }.count))" : viewModel.currentNote.title,
                     isDestination: !viewModel.showingList,
-                    isEditingNote: isEditingNote,
                     forwardOrBackward: forwardOrBackward,
                     backAction: {
                         isEditingNote = false
@@ -178,49 +177,48 @@ struct OldOSNotesRootView: View {
         }
         .compositingGroup()
         .clipped()
-        .actionSheet(item: $activeMenu) { menu in
-            switch menu {
-            case .detailPlus:
-                return ActionSheet(
-                    title: Text("添加"),
-                    buttons: [
-                        .default(Text("新建备忘录")) {
-                            pendingImage = nil
-                            withAnimation(.linear(duration: 0.28)) {
-                                viewModel.createNote()
-                            }
-                        },
-                        .default(Text("插入图片")) {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                                activeMenu = .imageSource
-                            }
-                        },
-                        .cancel()
-                    ]
-                )
-            case .imageSource:
-                return ActionSheet(
-                    title: Text("选择图片来源"),
-                    buttons: [
-                        .default(Text("相册")) {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                                activePicker = .photoLibrary
-                            }
-                        },
-                        .default(Text("剪贴板")) {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                                insertImageFromClipboard()
-                            }
-                        },
-                        .default(Text("文件")) {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                                activePicker = .files
-                            }
-                        },
-                        .cancel()
-                    ]
-                )
+        .confirmationDialog(
+            activeMenu == .imageSource ? "选择图片来源" : "添加",
+            isPresented: Binding(
+                get: { activeMenu != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        activeMenu = nil
+                    }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            if activeMenu == .detailPlus {
+                Button("新建备忘录") {
+                    pendingImage = nil
+                    withAnimation(.linear(duration: 0.28)) {
+                        viewModel.createNote()
+                    }
+                }
+                Button("插入图片") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        activeMenu = .imageSource
+                    }
+                }
+            } else if activeMenu == .imageSource {
+                Button("相册") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        activePicker = .photoLibrary
+                    }
+                }
+                Button("剪贴板") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        insertImageFromClipboard()
+                    }
+                }
+                Button("文件") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        activePicker = .files
+                    }
+                }
             }
+            Button("取消", role: .cancel) {}
         }
         .sheet(item: $activePicker) { picker in
             switch picker {
@@ -817,7 +815,6 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
 struct OldOSNotesTitleBar: View {
     let title: String
     let isDestination: Bool
-    let isEditingNote: Bool
     let forwardOrBackward: Bool
     let backAction: () -> Void
     let newAction: () -> Void
@@ -870,24 +867,10 @@ struct OldOSNotesTitleBar: View {
 
             HStack {
                 Spacer()
-                if isEditingNote {
-                    OldOSNotesHeaderTextButton(title: "Done", action: dismissKeyboard)
-                        .padding(.trailing, 5)
-                } else {
-                    OldOSNotesHeaderImageButton(imageName: "UIButtonBarPlus", action: newAction)
-                        .padding(.trailing, 5)
-                }
+                OldOSNotesHeaderImageButton(imageName: "UIButtonBarPlus", action: newAction)
+                    .padding(.trailing, 5)
             }
         }
-    }
-
-    private func dismissKeyboard() {
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder),
-            to: nil,
-            from: nil,
-            for: nil
-        )
     }
 }
 
