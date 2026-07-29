@@ -1114,13 +1114,7 @@ struct ShareAddressSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            RetroTitleBar(title: "共享地址") {
-                Button(action: onClose) {
-                    OldOSHeaderControl(title: "完成", iconName: nil)
-                        .frame(width: 55, height: 33)
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
+            OldOSNotesShareTitleBar(closeAction: onClose)
 
             GeometryReader { geometry in
                 ZStack(alignment: .topLeading) {
@@ -1303,7 +1297,10 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
-            if viewModel.showingList { NotesListView(viewModel: viewModel) } else { editor }
+            OldOSNotesRootView(
+                viewModel: viewModel,
+                showingDeleteConfirmation: $showingDeleteConfirmation
+            )
             if viewModel.showingShareSheet { ShareAddressSheet(server: viewModel.server) { viewModel.showingShareSheet = false } }
         }
         .onAppear { viewModel.server.updateSharedText(viewModel.text) }

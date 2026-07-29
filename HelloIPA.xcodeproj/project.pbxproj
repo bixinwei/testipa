@@ -8,6 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		A00000000000000000000011 /* HelloIPAApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000001 /* HelloIPAApp.swift */; };
+		A00000000000000000000013 /* OldOSNotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000004 /* OldOSNotesView.swift */; };
+		A00000000000000000000014 /* DALinedTextView.m in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000005 /* DALinedTextView.m */; };
+		A0000000000000000000002D /* OldOSNotes.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000003D /* OldOSNotes.xcassets */; };
 		A00000000000000000000021 /* oldos-notes-body.png in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000031 /* oldos-notes-body.png */; };
 		A00000000000000000000022 /* oldos-notes-topbar.png in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000032 /* oldos-notes-topbar.png */; };
 		A00000000000000000000023 /* oldos-notes-back.png in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000033 /* oldos-notes-back.png */; };
@@ -26,6 +29,10 @@
 		A00000000000000000000001 /* HelloIPAApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelloIPAApp.swift; sourceTree = "<group>"; };
 		A00000000000000000000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A00000000000000000000003 /* HelloIPA.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HelloIPA.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00000000000000000000004 /* OldOSNotesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OldOSNotesView.swift; sourceTree = "<group>"; };
+		A00000000000000000000005 /* DALinedTextView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DALinedTextView.m; sourceTree = "<group>"; };
+		A0000000000000000000000D /* DALinedTextView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DALinedTextView.h; sourceTree = "<group>"; };
+		A0000000000000000000000E /* HelloIPA-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "HelloIPA-Bridging-Header.h"; sourceTree = "<group>"; };
 		A00000000000000000000031 /* oldos-notes-body.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/oldos-notes-body.png"; sourceTree = "<group>"; };
 		A00000000000000000000032 /* oldos-notes-topbar.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/oldos-notes-topbar.png"; sourceTree = "<group>"; };
 		A00000000000000000000033 /* oldos-notes-back.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/oldos-notes-back.png"; sourceTree = "<group>"; };
@@ -38,6 +45,7 @@
 		A0000000000000000000003A /* oldos-notes-button-center.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/oldos-notes-button-center.png"; sourceTree = "<group>"; };
 		A0000000000000000000003B /* oldos-notes-back-arrow.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/oldos-notes-back-arrow.png"; sourceTree = "<group>"; };
 		A0000000000000000000003C /* oldos-notes-body-margin.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/oldos-notes-body-margin.png"; sourceTree = "<group>"; };
+		A0000000000000000000003D /* OldOSNotes.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = OldOSNotes.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -63,7 +71,12 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000001 /* HelloIPAApp.swift */,
+				A00000000000000000000004 /* OldOSNotesView.swift */,
+				A00000000000000000000005 /* DALinedTextView.m */,
+				A0000000000000000000000D /* DALinedTextView.h */,
+				A0000000000000000000000E /* HelloIPA-Bridging-Header.h */,
 				A00000000000000000000002 /* Info.plist */,
+				A0000000000000000000003D /* OldOSNotes.xcassets */,
 				A00000000000000000000031 /* oldos-notes-body.png */,
 				A00000000000000000000032 /* oldos-notes-topbar.png */,
 				A00000000000000000000033 /* oldos-notes-back.png */,
@@ -158,6 +171,7 @@
 				A0000000000000000000002A /* oldos-notes-button-center.png in Resources */,
 				A0000000000000000000002B /* oldos-notes-back-arrow.png in Resources */,
 				A0000000000000000000002C /* oldos-notes-body-margin.png in Resources */,
+				A0000000000000000000002D /* OldOSNotes.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -169,6 +183,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				A00000000000000000000011 /* HelloIPAApp.swift in Sources */,
+				A00000000000000000000013 /* OldOSNotesView.swift in Sources */,
+				A00000000000000000000014 /* DALinedTextView.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -239,6 +255,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "HelloIPA/HelloIPA-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -263,6 +280,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "HelloIPA/HelloIPA-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
