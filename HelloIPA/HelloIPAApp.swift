@@ -869,26 +869,6 @@ final class LocalTextShareServer: ObservableObject {
               border-radius: 10px;
               border: 1px solid var(--line);
             }
-            .image-actions {
-              display: flex;
-              flex-wrap: wrap;
-              gap: 8px;
-              margin-top: 8px;
-            }
-            .image-actions a,
-            .image-actions button {
-              display: inline-flex;
-              align-items: center;
-              margin: 0;
-              padding: 9px 13px;
-              border-radius: 10px;
-              background: #1f6feb;
-              color: #fff;
-              font-size: 14px;
-              font-weight: 600;
-              text-decoration: none;
-              box-shadow: none;
-            }
           </style>
         </head>
         <body>
@@ -904,7 +884,7 @@ final class LocalTextShareServer: ObservableObject {
             >\(renderedDocument)</div>
             <button id="syncButton" type="button">同步到手机</button>
             <div class="status" id="status"></div>
-            <div class="content">直接在上方正文中编辑，完成后点击“同步到手机”。图片下方可以复制或下载原文件。</div>
+            <div class="content">直接在上方正文中编辑，完成后点击“同步到手机”。长按图片可使用浏览器的原生复制或保存操作。</div>
           </main>
           <script>
             const button = document.getElementById('syncButton');
@@ -993,26 +973,6 @@ final class LocalTextShareServer: ObservableObject {
               }
             });
 
-            document.querySelectorAll('[data-copy-image]').forEach(copyButton => {
-              copyButton.addEventListener('click', async () => {
-                const imageURL = copyButton.dataset.copyImage;
-                const originalLabel = copyButton.textContent;
-                try {
-                  const response = await fetch(imageURL);
-                  const blob = await response.blob();
-                  await navigator.clipboard.write([
-                    new ClipboardItem({ [blob.type]: blob })
-                  ]);
-                  copyButton.textContent = '已复制';
-                } catch (_) {
-                  copyButton.textContent = '请长按图片复制';
-                  window.open(imageURL, '_blank');
-                }
-                setTimeout(() => {
-                  copyButton.textContent = originalLabel;
-                }, 1800);
-              });
-            });
           </script>
         </body>
         </html>
@@ -1046,7 +1006,6 @@ final class LocalTextShareServer: ObservableObject {
                 html += escapeHTML(nsText.substring(with: NSRange(location: cursor, length: location - cursor)))
             }
 
-            let imagePath = "/image/\(image.id.uuidString)"
             let previewPath = "/preview/\(image.id.uuidString)"
             let filename = escapeHTML(image.filename)
             html += """
@@ -1056,10 +1015,6 @@ final class LocalTextShareServer: ObservableObject {
               contenteditable="false"
             >
               <img src="\(previewPath)" alt="\(filename)">
-              <div class="image-actions">
-                <button type="button" data-copy-image="\(previewPath)">复制</button>
-                <a href="\(imagePath)" download="\(filename)">下载</a>
-              </div>
             </div>
             """
             cursor = location
