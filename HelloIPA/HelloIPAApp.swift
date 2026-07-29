@@ -1485,6 +1485,7 @@ struct ShareAddressSheet: View {
     let onClose: () -> Void
     @State private var showingCopiedToast = false
     @State private var publicPassword = ""
+    @State private var isPublicPasswordVisible = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1559,15 +1560,35 @@ struct ShareAddressSheet: View {
                         .foregroundColor(Color.retroMetadata)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    SecureField("设置访问密码", text: $publicPassword)
+                    HStack(spacing: 0) {
+                        Group {
+                            if isPublicPasswordVisible {
+                                // A normal text field intentionally keeps third-party
+                                // keyboards available. iOS can restrict them for
+                                // secure-entry fields such as SecureField.
+                                TextField("设置访问密码", text: $publicPassword)
+                            } else {
+                                SecureField("设置访问密码", text: $publicPassword)
+                            }
+                        }
                         .font(.system(size: 16))
-                        .padding(10)
-                        .background(Color.white.opacity(0.48))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .stroke(Color.retroMetadata.opacity(0.55), lineWidth: 1)
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+
+                        Button(isPublicPasswordVisible ? "隐藏" : "显示") {
+                            isPublicPasswordVisible.toggle()
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(Color.retroMetadata)
+                        .padding(.leading, 10)
+                    }
+                    .padding(10)
+                    .background(Color.white.opacity(0.48))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(Color.retroMetadata.opacity(0.55), lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
 
                     Button(action: { publishPublicShare(publicPassword) }) {
                         HStack {
