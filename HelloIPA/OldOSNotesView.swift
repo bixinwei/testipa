@@ -292,6 +292,25 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
     let metadata: OldOSDestinationMetadata
     @Binding var isEditing: Bool
 
+    private static let noteFont = UIFont(name: "Noteworthy-Bold", size: 19)
+        ?? .systemFont(ofSize: 19, weight: .bold)
+
+    private static let noteAttributes: [NSAttributedString.Key: Any] = [
+        .font: noteFont,
+        .foregroundColor: UIColor.black
+    ]
+
+    private static func styledText(_ value: String) -> NSAttributedString {
+        let styled = NSMutableAttributedString(string: value, attributes: noteAttributes)
+        let range = NSRange(value.startIndex..., in: value)
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        detector?.enumerateMatches(in: value, options: [], range: range) { match, _, _ in
+            guard let match = match, let url = match.url else { return }
+            styled.addAttribute(.link, value: url, range: match.range)
+        }
+        return styled
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text, isEditing: $isEditing)
     }
@@ -305,8 +324,14 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         view.backgroundColor = .clear
         view.isOpaque = false
         view.overrideUserInterfaceStyle = .light
-        view.font = UIFont(name: "Noteworthy-Bold", size: 19)
+        view.font = Self.noteFont
         view.textColor = .black
+        view.typingAttributes = Self.noteAttributes
+        view.isSelectable = true
+        view.linkTextAttributes = [
+            .foregroundColor: UIColor.systemBlue,
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
         view.delegate = context.coordinator
         view.autoresizingMask = [.flexibleHeight, .flexibleWidth]
         view.tintColor = UIColor(red: 113/255, green: 93/255, blue: 81/255, alpha: 1)
@@ -326,14 +351,24 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         context.coordinator.headerController = headerController
 
         view.textContainerInset = UIEdgeInsets(top: 40, left: 28, bottom: 30, right: 3)
-        view.text = text
+        view.attributedText = Self.styledText(text)
+        view.typingAttributes = Self.noteAttributes
         return view
     }
 
     func updateUIView(_ uiView: DALinedTextView, context: Context) {
         context.coordinator.headerController?.rootView = OldOSDestinationHeader(metadata: metadata)
         if uiView.text != text {
-            uiView.text = text
+            let selectedRange = uiView.selectedRange
+            let contentOffset = uiView.contentOffset
+            uiView.attributedText = Self.styledText(text)
+            uiView.typingAttributes = Self.noteAttributes
+            let textLength = (text as NSString).length
+            uiView.selectedRange = NSRange(
+                location: min(selectedRange.location, textLength),
+                length: 0
+            )
+            uiView.setContentOffset(contentOffset, animated: false)
         }
     }
 
@@ -356,11 +391,31 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
+            let selectedRange = textView.selectedRange
+            let contentOffset = textView.contentOffset
+            textView.attributedText = OldOSNotesMultilineTextView.styledText(textView.text)
+            textView.typingAttributes = OldOSNotesMultilineTextView.noteAttributes
+            textView.selectedRange = selectedRange
+            textView.setContentOffset(contentOffset, animated: false)
             isEditing = false
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            textView.typingAttributes = OldOSNotesMultilineTextView.noteAttributes
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             scrollView.setNeedsDisplay()
+        }
+
+        func textView(
+            _ textView: UITextView,
+            shouldInteractWith URL: URL,
+            in characterRange: NSRange,
+            interaction: UITextItemInteraction
+        ) -> Bool {
+            UIApplication.shared.open(URL, options: [:], completionHandler: nil)
+            return false
         }
     }
 }
