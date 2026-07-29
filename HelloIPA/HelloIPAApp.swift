@@ -259,7 +259,6 @@ struct NoteMetadata: Equatable {
 
 struct NoteMetadataHeader: View {
     let metadata: NoteMetadata
-    private let horizontalInset = 20 / UIScreen.main.scale
 
     var body: some View {
         HStack {
@@ -270,7 +269,8 @@ struct NoteMetadataHeader: View {
                 .font(.custom("Helvetica Neue Regular", size: 14))
         }
         .foregroundColor(Color(red: 161/255, green: 93/255, blue: 68/255))
-        .padding(.horizontal, horizontalInset)
+        .padding(.leading, 32)
+        .padding(.trailing, 8)
         .padding(.top, 10)
         .padding(.bottom, 15)
         .background(Color.clear)
@@ -282,6 +282,7 @@ struct NoteMetadataHeader: View {
 /// UITextView, so they stay registered with the glyph baselines while editing.
 final class OldOSLinedTextView: UITextView {
     private let horizontalLineColor = UIColor(red: 78/255, green: 90/255, blue: 130/255, alpha: 0.4)
+    private let verticalLineColor = UIColor(red: 161/255, green: 93/255, blue: 68/255, alpha: 0.45)
 
     override func draw(_ rect: CGRect) {
         super.draw(rect)
@@ -303,6 +304,17 @@ final class OldOSLinedTextView: UITextView {
         }
         context.strokePath()
 
+        // This is the verticalLineColor path from DALinedTextView.m. It is
+        // expressed in the scroll view's content coordinates, so it stays
+        // continuous from the first ruled line through every scroll position.
+        context.beginPath()
+        context.setStrokeColor(verticalLineColor.cgColor)
+        let marginX = bounds.minX + textContainerInset.left - 3 / scale
+        for x in [marginX, marginX + 2 / scale] {
+            context.move(to: CGPoint(x: x, y: bounds.minY))
+            context.addLine(to: CGPoint(x: x, y: bounds.minY + bounds.height))
+        }
+        context.strokePath()
     }
 
     override var font: UIFont? { didSet { setNeedsDisplay() } }
@@ -327,7 +339,6 @@ struct StableTextEditor: UIViewRepresentable {
 
     private static let noteFont = UIFont(name: "Noteworthy-Bold", size: 19) ?? .systemFont(ofSize: 19, weight: .bold)
     private static let noteTextColor = UIColor.black
-    private static let bodyHorizontalInset = 20 / UIScreen.main.scale
 
     private static func noteAttributes() -> [NSAttributedString.Key: Any] {
         return [
@@ -374,7 +385,7 @@ struct StableTextEditor: UIViewRepresentable {
         textView.showsHorizontalScrollIndicator = false
         textView.textContainer.widthTracksTextView = true
         textView.textContainer.lineBreakMode = .byWordWrapping
-        textView.textContainerInset = UIEdgeInsets(top: 40, left: Self.bodyHorizontalInset, bottom: 30, right: Self.bodyHorizontalInset)
+        textView.textContainerInset = UIEdgeInsets(top: 40, left: 28, bottom: 30, right: 3)
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
         textView.attributedText = Self.styledText(text)
@@ -1332,7 +1343,10 @@ struct ContentView: View {
                 }
                 ZStack {
                     Color.retroPaper
-                    if let paper = oldOSImage(named: "oldos-notes-body") {
+                    // OldOS uses bodyMarginThin-568h for the editor: unlike
+                    // the list paper, this source image includes its left
+                    // ruled-page margin.
+                    if let paper = oldOSImage(named: "oldos-notes-body-margin") {
                         paper.resizable().scaledToFill().clipped()
                     }
                     StableTextEditor(
@@ -1351,9 +1365,6 @@ struct ContentView: View {
                 // the editor above cannot scroll beneath or be covered by it.
                 ZStack(alignment: .bottom) {
                     Color.retroPaper
-                    if let paper = oldOSImage(named: "oldos-notes-body") {
-                        paper.resizable().scaledToFill().clipped()
-                    }
                     HStack(spacing: 0) {
                         toolButton("oldos-previous", enabled: viewModel.canMovePrevious) { viewModel.moveSelection(by: -1) }
                         Spacer(minLength: 0)
@@ -1424,7 +1435,7 @@ struct ContentView: View {
     }
 
     private var toolbarBottomInset: CGFloat {
-        100 / UIScreen.main.scale
+        160 / UIScreen.main.scale
     }
 
     private var toolbarButtonHeight: CGFloat { 44 }
