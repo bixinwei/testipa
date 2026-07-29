@@ -347,6 +347,10 @@ struct StableTextEditor: UIViewRepresentable {
     func makeUIView(context: Context) -> OldOSLinedTextView {
         let textView = OldOSLinedTextView()
         textView.delegate = context.coordinator
+        // This is the redraw path used by OldOS's DALinedTextView. UIKit
+        // invalidates the ruled view as its bounds scroll, without forcing a
+        // synchronous full redraw from every scroll callback.
+        textView.contentMode = .redraw
         // A transparent UIKit view must not declare itself opaque. Otherwise the
         // compositor is allowed to substitute a black backing store in Dark Mode.
         textView.isOpaque = false
@@ -422,13 +426,6 @@ struct StableTextEditor: UIViewRepresentable {
             textView.attributedText = StableTextEditor.styledText(textView.text)
             textView.typingAttributes = StableTextEditor.noteAttributes()
             textView.selectedRange = selectedRange
-        }
-
-        func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            // DALinedTextView draws the rules in the scroll view's content
-            // coordinate space. Ask UIKit to redraw whenever that coordinate
-            // space moves, exactly as its original implementation requires.
-            (scrollView as? OldOSLinedTextView)?.setNeedsDisplay()
         }
 
         func textView(_ textView: UITextView,
@@ -1352,7 +1349,7 @@ struct ContentView: View {
                         Spacer(minLength: 0)
                         toolButton("oldos-next", enabled: viewModel.canMoveNext) { viewModel.moveSelection(by: 1) }
                     }
-                    .padding(.horizontal, toolbarHorizontalInset)
+                    .padding(.horizontal, toolbarHorizontalInset(for: geometry.size.width))
                     .frame(maxWidth: .infinity)
                     .padding(.bottom, toolbarBottomInset)
                 }
@@ -1385,7 +1382,7 @@ struct ContentView: View {
                 Image(systemName: icon).font(.system(size: 23, weight: .regular))
             }
         }
-        .frame(width: 52, height: 44)
+        .frame(width: toolbarButtonWidth, height: toolbarButtonHeight)
         .foregroundColor(Color.retroLeatherLight)
         .buttonStyle(PlainButtonStyle())
         .disabled(!enabled)
@@ -1408,14 +1405,17 @@ struct ContentView: View {
         return NoteMetadata(relativeDate: relativeDate, timestamp: formatter.string(from: date))
     }
 
-    private var toolbarHorizontalInset: CGFloat {
-        320 / UIScreen.main.scale
+    private func toolbarHorizontalInset(for containerWidth: CGFloat) -> CGFloat {
+        let preferredInset = 320 / UIScreen.main.scale
+        let maxInsetThatKeepsButtonsVisible = max(0, (containerWidth - 4 * toolbarButtonWidth) / 2)
+        return min(preferredInset, maxInsetThatKeepsButtonsVisible)
     }
 
     private var toolbarBottomInset: CGFloat {
         100 / UIScreen.main.scale
     }
 
+    private var toolbarButtonWidth: CGFloat { 52 }
     private var toolbarButtonHeight: CGFloat { 44 }
 }
 
