@@ -472,17 +472,24 @@ final class LocalTextShareServer: ObservableObject {
     private let maxRequestSize = 1_048_576
     private var listener: NWListener?
     private var currentText: String
+    private var currentImages: [NoteImage]
     private var currentPort: UInt16?
     private var nextPortIndex = 0
 
-    init(initialText: String = AppDefaults.initialText) {
+    init(initialText: String = AppDefaults.initialText, initialImages: [NoteImage] = []) {
         self.syncedText = initialText
         self.currentText = initialText
+        self.currentImages = initialImages
     }
 
     func updateSharedText(_ text: String) {
+        updateSharedDocument(text: text, images: currentImages)
+    }
+
+    func updateSharedDocument(text: String, images: [NoteImage]) {
         queue.async {
             self.currentText = text
+            self.currentImages = images
         }
         DispatchQueue.main.async {
             if self.syncedText != text {
@@ -491,8 +498,8 @@ final class LocalTextShareServer: ObservableObject {
         }
     }
 
-    func startSharing(text: String) {
-        updateSharedText(text)
+    func startSharing(text: String, images: [NoteImage]) {
+        updateSharedDocument(text: text, images: images)
         DispatchQueue.main.async {
             self.errorMessage = nil
             self.isSharingEnabled = true
@@ -661,33 +668,53 @@ final class LocalTextShareServer: ObservableObject {
             }
 
             if let request = Self.parseCompleteRequest(from: buffer) {
-                let response: String
+                let response: Data
 
                 if request.requestLine.hasPrefix("GET "), request.path == "/" {
-                    let body = self.makeHTMLPage(with: self.currentText)
-                    response = self.httpResponse(
+                    let body = self.makeHTMLPage(with: self.currentText, images: self.currentImages)
+                    response = self.httpDataResponse(
                         statusLine: "HTTP/1.1 200 OK\r\n",
                         contentType: "text/html; charset=utf-8",
-                        body: body
+                        body: Data(body.utf8)
+                    )
+                } else if request.requestLine.hasPrefix("GET "),
+                          let imageID = Self.previewImageID(from: request.path),
+                          self.currentImages.contains(where: { $0.id == imageID }),
+                          let previewData = NoteImageStore.shared.previewData(for: imageID) {
+                    response = self.httpDataResponse(
+                        statusLine: "HTTP/1.1 200 OK\r\n",
+                        contentType: "image/jpeg",
+                        body: previewData,
+                        additionalHeaders: ["Cache-Control": "private, max-age=3600"]
+                    )
+                } else if request.requestLine.hasPrefix("GET "),
+                          let imageID = Self.imageID(from: request.path),
+                          let image = self.currentImages.first(where: { $0.id == imageID }),
+                          let imageData = NoteImageStore.shared.originalData(for: image.id) {
+                    response = self.httpDataResponse(
+                        statusLine: "HTTP/1.1 200 OK\r\n",
+                        contentType: image.mimeType,
+                        body: imageData,
+                        additionalHeaders: ["Cache-Control": "private, max-age=3600"]
                     )
                 } else if request.requestLine.hasPrefix("POST "), request.path == "/sync" {
                     self.updateSharedText(request.body)
                     let body = "{\"ok\":true}"
-                    response = self.httpResponse(
+                    response = self.httpDataResponse(
                         statusLine: "HTTP/1.1 200 OK\r\n",
                         contentType: "application/json; charset=utf-8",
-                        body: body
+                        body: Data(body.utf8)
                     )
                 } else {
                     let body = "<html><body><h1>404</h1></body></html>"
-                    response = self.httpResponse(
+                    response = self.httpDataResponse(
                         statusLine: "HTTP/1.1 404 Not Found\r\n",
                         contentType: "text/html; charset=utf-8",
-                        body: body
+                        body: Data(body.utf8)
                     )
                 }
 
-                connection.send(content: response.data(using: .utf8), completion: .contentProcessed { _ in
+                connection.send(content: response, completion: .contentProcessed { _ in
                     connection.cancel()
                 })
                 return
@@ -711,8 +738,28 @@ final class LocalTextShareServer: ObservableObject {
             + body
     }
 
-    private func makeHTMLPage(with text: String) -> String {
+    private func httpDataResponse(
+        statusLine: String,
+        contentType: String,
+        body: Data,
+        additionalHeaders: [String: String] = [:]
+    ) -> Data {
+        var header = statusLine
+            + "Content-Type: \(contentType)\r\n"
+            + "Content-Length: \(body.count)\r\n"
+        for (name, value) in additionalHeaders {
+            header += "\(name): \(value)\r\n"
+        }
+        header += "Connection: close\r\n\r\n"
+
+        var response = Data(header.utf8)
+        response.append(body)
+        return response
+    }
+
+    private func makeHTMLPage(with text: String, images: [NoteImage]) -> String {
         let escapedText = Self.escapeHTML(text)
+        let renderedDocument = Self.renderDocumentHTML(text: text, images: images)
 
         return """
         <!doctype html>
@@ -801,6 +848,51 @@ final class LocalTextShareServer: ObservableObject {
               line-height: 1.7;
               word-break: break-word;
             }
+            .preview-title {
+              margin: 28px 0 10px;
+              font-size: 18px;
+            }
+            .document-preview {
+              padding: 18px;
+              border: 1px solid var(--line);
+              border-radius: 18px;
+              background: #fff;
+              font-size: 17px;
+              line-height: 1.6;
+              white-space: pre-wrap;
+              overflow-wrap: anywhere;
+            }
+            .image-block {
+              margin: 14px 0;
+              white-space: normal;
+            }
+            .image-block img {
+              display: block;
+              max-width: 100%;
+              height: auto;
+              border-radius: 10px;
+              border: 1px solid var(--line);
+            }
+            .image-actions {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 8px;
+              margin-top: 8px;
+            }
+            .image-actions a,
+            .image-actions button {
+              display: inline-flex;
+              align-items: center;
+              margin: 0;
+              padding: 9px 13px;
+              border-radius: 10px;
+              background: #1f6feb;
+              color: #fff;
+              font-size: 14px;
+              font-weight: 600;
+              text-decoration: none;
+              box-shadow: none;
+            }
           </style>
         </head>
         <body>
@@ -811,6 +903,8 @@ final class LocalTextShareServer: ObservableObject {
             <button id="syncButton" type="button">同步到手机</button>
             <div class="status" id="status"></div>
             <div class="content">在这个页面修改文本后，点击“同步到手机”，手机 App 内的文本内容会立即更新。</div>
+            <h2 class="preview-title">正文预览</h2>
+            <section class="document-preview">\(renderedDocument)</section>
           </main>
           <script>
             const button = document.getElementById('syncButton');
@@ -859,6 +953,27 @@ final class LocalTextShareServer: ObservableObject {
                 button.disabled = false;
               }
             });
+
+            document.querySelectorAll('[data-copy-image]').forEach(copyButton => {
+              copyButton.addEventListener('click', async () => {
+                const imageURL = copyButton.dataset.copyImage;
+                const originalLabel = copyButton.textContent;
+                try {
+                  const response = await fetch(imageURL);
+                  const blob = await response.blob();
+                  await navigator.clipboard.write([
+                    new ClipboardItem({ [blob.type]: blob })
+                  ]);
+                  copyButton.textContent = '已复制';
+                } catch (_) {
+                  copyButton.textContent = '请长按图片复制';
+                  window.open(imageURL, '_blank');
+                }
+                setTimeout(() => {
+                  copyButton.textContent = originalLabel;
+                }, 1800);
+              });
+            });
           </script>
         </body>
         </html>
@@ -872,6 +987,60 @@ final class LocalTextShareServer: ObservableObject {
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "'", with: "&#39;")
+    }
+
+    private static func renderDocumentHTML(text: String, images: [NoteImage]) -> String {
+        let nsText = text as NSString
+        let orderedImages = images.enumerated().sorted {
+            if $0.element.location == $1.element.location {
+                return $0.offset < $1.offset
+            }
+            return $0.element.location < $1.element.location
+        }
+
+        var html = ""
+        var cursor = 0
+
+        for (_, image) in orderedImages {
+            let location = min(max(image.location, cursor), nsText.length)
+            if location > cursor {
+                html += escapeHTML(nsText.substring(with: NSRange(location: cursor, length: location - cursor)))
+            }
+
+            let imagePath = "/image/\(image.id.uuidString)"
+            let previewPath = "/preview/\(image.id.uuidString)"
+            let filename = escapeHTML(image.filename)
+            html += """
+            <div class="image-block">
+              <a href="\(imagePath)" target="_blank" rel="noopener">
+                <img src="\(previewPath)" alt="\(filename)">
+              </a>
+              <div class="image-actions">
+                <a href="\(imagePath)" target="_blank" rel="noopener">查看原图</a>
+                <a href="\(imagePath)" download="\(filename)">下载图片</a>
+                <button type="button" data-copy-image="\(previewPath)">复制图片</button>
+              </div>
+            </div>
+            """
+            cursor = location
+        }
+
+        if cursor < nsText.length {
+            html += escapeHTML(nsText.substring(from: cursor))
+        }
+        return html
+    }
+
+    private static func imageID(from path: String) -> UUID? {
+        let components = path.split(separator: "/", omittingEmptySubsequences: true)
+        guard components.count == 2, components[0] == "image" else { return nil }
+        return UUID(uuidString: String(components[1]))
+    }
+
+    private static func previewImageID(from path: String) -> UUID? {
+        let components = path.split(separator: "/", omittingEmptySubsequences: true)
+        guard components.count == 2, components[0] == "preview" else { return nil }
+        return UUID(uuidString: String(components[1]))
     }
 
     private static func parseCompleteRequest(from data: Data) -> (requestLine: String, path: String, body: String)? {
@@ -980,10 +1149,40 @@ final class LocalTextShareServer: ObservableObject {
     }
 }
 
+struct NoteImage: Identifiable, Codable, Equatable {
+    var id = UUID()
+    var location: Int
+    var filename: String
+    var mimeType: String
+}
+
 struct Note: Identifiable, Codable, Equatable {
     var id = UUID()
     var text: String
     var modifiedAt = Date()
+    var images: [NoteImage] = []
+
+    init(id: UUID = UUID(), text: String, modifiedAt: Date = Date(), images: [NoteImage] = []) {
+        self.id = id
+        self.text = text
+        self.modifiedAt = modifiedAt
+        self.images = images
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case text
+        case modifiedAt
+        case images
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        text = try container.decode(String.self, forKey: .text)
+        modifiedAt = try container.decodeIfPresent(Date.self, forKey: .modifiedAt) ?? Date()
+        images = try container.decodeIfPresent([NoteImage].self, forKey: .images) ?? []
+    }
 
     var title: String {
         let firstLine = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
@@ -1002,7 +1201,7 @@ final class AppViewModel: ObservableObject {
     @Published var text: String {
         didSet {
             updateSelectedNote()
-            server.updateSharedText(text)
+            server.updateSharedDocument(text: text, images: currentNote.images)
         }
     }
     @Published var showingShareSheet = false
@@ -1022,7 +1221,10 @@ final class AppViewModel: ObservableObject {
         self.notes = restoredNotes
         self.selectedNoteID = restoredNotes[0].id
         self.text = restoredNotes[0].text
-        self.server = LocalTextShareServer(initialText: restoredNotes[0].text)
+        self.server = LocalTextShareServer(
+            initialText: restoredNotes[0].text,
+            initialImages: restoredNotes[0].images
+        )
 
         server.$syncedText
             .receive(on: DispatchQueue.main)
@@ -1044,7 +1246,7 @@ final class AppViewModel: ObservableObject {
     }
 
     func startSharing() {
-        server.startSharing(text: text)
+        server.startSharing(text: text, images: currentNote.images)
         showingShareSheet = true
     }
 
@@ -1074,6 +1276,7 @@ final class AppViewModel: ObservableObject {
 
     func deleteSelectedNote() {
         guard let index = notes.firstIndex(where: { $0.id == selectedNoteID }) else { return }
+        notes[index].images.forEach { NoteImageStore.shared.removeImage(withID: $0.id) }
         notes.remove(at: index)
         if notes.isEmpty { notes = [Note(text: "")] }
         let nextIndex = min(index, notes.count - 1)
@@ -1092,6 +1295,23 @@ final class AppViewModel: ObservableObject {
     var canMovePrevious: Bool { (notes.firstIndex { $0.id == selectedNoteID } ?? 0) > 0 }
     var canMoveNext: Bool { (notes.firstIndex { $0.id == selectedNoteID } ?? notes.count - 1) < notes.count - 1 }
     var currentNote: Note { notes.first(where: { $0.id == selectedNoteID }) ?? notes[0] }
+
+    func updateSelectedDocument(text newText: String, images: [NoteImage]) {
+        guard let index = notes.firstIndex(where: { $0.id == selectedNoteID }) else { return }
+        let changed = notes[index].text != newText || notes[index].images != images
+        guard changed else { return }
+
+        notes[index].images = images
+        notes[index].text = newText
+        notes[index].modifiedAt = Date()
+
+        if text != newText {
+            text = newText
+        } else {
+            persistNotes()
+            server.updateSharedDocument(text: newText, images: images)
+        }
+    }
 
     private func updateSelectedNote() {
         guard let index = notes.firstIndex(where: { $0.id == selectedNoteID }) else { return }
@@ -1303,7 +1523,12 @@ struct ContentView: View {
             )
             if viewModel.showingShareSheet { ShareAddressSheet(server: viewModel.server) { viewModel.showingShareSheet = false } }
         }
-        .onAppear { viewModel.server.updateSharedText(viewModel.text) }
+        .onAppear {
+            viewModel.server.updateSharedDocument(
+                text: viewModel.text,
+                images: viewModel.currentNote.images
+            )
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in viewModel.persistText() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in viewModel.persistText() }
         .edgesIgnoringSafeArea(.bottom)
