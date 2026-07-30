@@ -68,6 +68,21 @@ private extension NSAttributedString.Key {
     static let helloIPANoteImageID = NSAttributedString.Key("HelloIPA.NoteImageID")
 }
 
+private final class AttachmentCaretReproductionTextView: DALinedTextView {
+    var onAttachmentToWindow: ((DALinedTextView) -> Void)?
+    private var hasAttachedToWindow = false
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, !hasAttachedToWindow else { return }
+        hasAttachedToWindow = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.onAttachmentToWindow?(self)
+        }
+    }
+}
+
 private enum OldOSNotesActionMenu: Int, Identifiable {
     case detailPlus
     case imageSource
@@ -521,6 +536,11 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         .foregroundColor: UIColor.black
     ]
 
+    private static var isAttachmentCaretReproductionEnabled: Bool {
+        CommandLine.arguments.contains("-HelloIPA.AttachmentCaretReproduction")
+            || ProcessInfo.processInfo.environment["HELLOIPA_ATTACHMENT_CARET_REPRODUCTION"] == "1"
+    }
+
     private static func styledText(
         _ value: String,
         images: [NoteImage],
@@ -621,7 +641,9 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> DALinedTextView {
-        let view = DALinedTextView()
+        let view: DALinedTextView = Self.isAttachmentCaretReproductionEnabled
+            ? AttachmentCaretReproductionTextView()
+            : DALinedTextView()
         view.isScrollEnabled = true
         view.isEditable = true
         view.isUserInteractionEnabled = true
@@ -666,26 +688,23 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         )
         view.typingAttributes = Self.noteAttributes
         context.coordinator.recordAppliedDocument(text: text, images: images)
-        if CommandLine.arguments.contains("-HelloIPA.AttachmentCaretReproduction")
-            || ProcessInfo.processInfo.environment["HELLOIPA_ATTACHMENT_CARET_REPRODUCTION"] == "1" {
-            // UITextView cannot become first responder until it is attached to
-            // the scene. Delaying one run-loop turn was insufficient on a cold
-            // simulator launch, so wait until the normal window lifecycle is
-            // complete before exercising the real keyboard/caret path.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                let attachmentLocation = (view.attributedText.string as NSString)
-                    .range(of: "\u{FFFC}")
-                    .location
-                guard attachmentLocation != NSNotFound else { return }
-                guard view.window != nil else {
-                    NSLog("HelloIPA caret reproduction: text view is not attached to a window")
-                    return
+        if let reproductionView = view as? AttachmentCaretReproductionTextView {
+            // Run only after UIKit has attached the text view to its scene. This
+            // reproduces a real tap's first-responder lifecycle, rather than
+            // setting a selection while the representable is still detached.
+            reproductionView.onAttachmentToWindow = { textView in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    guard textView.window != nil else { return }
+                    let attachmentLocation = (textView.attributedText.string as NSString)
+                        .range(of: "\u{FFFC}")
+                        .location
+                    guard attachmentLocation != NSNotFound else { return }
+                    let becameFirstResponder = textView.becomeFirstResponder()
+                    NSLog("HelloIPA caret reproduction: becomeFirstResponder=%@", becameFirstResponder.description)
+                    // This is the logical insertion location immediately to the
+                    // attachment's right, matching the real-device failure case.
+                    textView.selectedRange = NSRange(location: attachmentLocation + 1, length: 0)
                 }
-                let becameFirstResponder = view.becomeFirstResponder()
-                NSLog("HelloIPA caret reproduction: becomeFirstResponder=%@", becameFirstResponder.description)
-                // This is the logical insertion location immediately to the
-                // attachment's right, matching the real-device failure case.
-                view.selectedRange = NSRange(location: attachmentLocation + 1, length: 0)
             }
         }
         return view
