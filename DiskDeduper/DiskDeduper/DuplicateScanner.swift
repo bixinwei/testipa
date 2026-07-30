@@ -133,10 +133,6 @@ final class DuplicateScanner: ObservableObject {
         accessedRootURL = nil
     }
 
-    deinit {
-        stopAccessingRoot()
-    }
-
     nonisolated private static func findDuplicates(
         at root: URL,
         mode: MatchingMode,
