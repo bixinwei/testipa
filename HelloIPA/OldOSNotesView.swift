@@ -544,6 +544,17 @@ struct OldOSNotesDestinationView: View {
                         .frame(height: 48)
                         .padding(.top, 24)
                         .padding(.bottom, 30)
+                        // This is a real toolbar surface, not a transparent
+                        // overlay: it preserves the 24 pt gap above the
+                        // controls and prevents editor text from showing
+                        // through the toolbar while scrolling.
+                        .background(
+                            Image("bodyMarginThin-568h")
+                                .resizable(
+                                    capInsets: EdgeInsets(top: 0, leading: 25, bottom: 0, trailing: 1),
+                                    resizingMode: .stretch
+                                )
+                        )
                     }
                 )
             }
