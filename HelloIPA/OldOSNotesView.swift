@@ -547,7 +547,7 @@ struct OldOSNotesDestinationView: View {
                             Spacer()
                         }
                         .frame(height: 48)
-                        .padding(.bottom, 15)
+                        .padding(.bottom, 30)
                     }
                 )
             }
