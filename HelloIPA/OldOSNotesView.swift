@@ -11,6 +11,8 @@ final class NoteImageStore {
     private let renderedPreviewCache = NSCache<NSString, UIImage>()
 
     private init() {
+        renderedPreviewCache.countLimit = 16
+        renderedPreviewCache.totalCostLimit = 48 * 1_024 * 1_024
         let fileManager = FileManager.default
         let applicationSupport = fileManager.urls(
             for: .applicationSupportDirectory,
@@ -71,7 +73,13 @@ final class NoteImageStore {
         let rendered = UIGraphicsImageRenderer(size: displaySize, format: format).image { _ in
             source.draw(in: CGRect(origin: .zero, size: displaySize))
         }
-        renderedPreviewCache.setObject(rendered, forKey: cacheKey)
+        let pixelWidth = Int((rendered.size.width * rendered.scale).rounded(.up))
+        let pixelHeight = Int((rendered.size.height * rendered.scale).rounded(.up))
+        renderedPreviewCache.setObject(
+            rendered,
+            forKey: cacheKey,
+            cost: pixelWidth * pixelHeight * 4
+        )
         return rendered
     }
 

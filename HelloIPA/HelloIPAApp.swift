@@ -1241,120 +1241,6 @@ final class LocalTextShareServer: ObservableObject {
     }
 }
 
-/// Client for the separately hosted, password-protected public Notes share.
-/// The service expires every link after ten minutes and revokes prior links
-/// immediately when a replacement is created.
-final class PublicTextShareClient: ObservableObject {
-    private static let apiBaseURL = URL(string: "https://helloipa-share.agile-fig-7406.chatgpt.site")!
-
-    @Published private(set) var shareURL: URL?
-    @Published private(set) var expiresAt: String?
-    @Published private(set) var errorMessage: String?
-    @Published private(set) var isPublishing = false
-
-    private struct ImagePayload: Encodable {
-        let dataBase64: String
-        let mimeType: String
-        let filename: String
-    }
-
-    private struct RequestPayload: Encodable {
-        let text: String
-        let password: String
-        let images: [ImagePayload]
-    }
-
-    private struct ResponsePayload: Decodable {
-        let shortCode: String
-        let shareUrl: String
-        let expiresAt: String?
-    }
-
-    func publish(text: String, images: [NoteImage], password: String) {
-        let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (1...8).contains(trimmedPassword.count) else {
-            errorMessage = "公网分享访问密码必须为 1–8 个字符。"
-            return
-        }
-
-        let payloadImages = images.compactMap { image -> ImagePayload? in
-            // The public endpoint limits a single upload to 8 MB. The Notes
-            // preview is a JPEG rendition created at insertion time, so it is
-            // safe to transfer and still preserves the inline note image.
-            guard let data = NoteImageStore.shared.previewData(for: image.id) else { return nil }
-            return ImagePayload(
-                dataBase64: data.base64EncodedString(),
-                mimeType: "image/jpeg",
-                filename: image.filename
-            )
-        }
-
-        var request = URLRequest(url: Self.apiBaseURL.appendingPathComponent("api/shares"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 45
-
-        do {
-            request.httpBody = try JSONEncoder().encode(
-                RequestPayload(text: text, password: trimmedPassword, images: payloadImages)
-            )
-        } catch {
-            errorMessage = "无法准备公网分享内容。"
-            return
-        }
-
-        errorMessage = nil
-        isPublishing = true
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.isPublishing = false
-
-                if let error = error as NSError? {
-                    self.errorMessage = "无法连接公网分享服务（\(error.localizedDescription)）。"
-                    return
-                }
-
-                guard let data = data, let http = response as? HTTPURLResponse else {
-                    self.errorMessage = "公网分享服务没有返回有效响应。"
-                    return
-                }
-
-                guard (200...299).contains(http.statusCode) else {
-                    let serverMessage = Self.serverMessage(from: data)
-                    switch http.statusCode {
-                    case 413:
-                        self.errorMessage = "图片或正文过大，公网服务拒绝了本次上传。"
-                    case 401, 403:
-                        self.errorMessage = "公网服务拒绝了本次创建请求（HTTP \(http.statusCode)）。"
-                    default:
-                        self.errorMessage = serverMessage ?? "公网服务返回错误（HTTP \(http.statusCode)）。"
-                    }
-                    return
-                }
-
-                guard let result = try? JSONDecoder().decode(ResponsePayload.self, from: data),
-                      let url = URL(string: result.shareUrl) else {
-                    self.errorMessage = "公网服务返回的数据无效。"
-                    return
-                }
-
-                self.expiresAt = result.expiresAt
-                self.shareURL = url
-            }
-        }.resume()
-    }
-
-    private static func serverMessage(from data: Data) -> String? {
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        return (object["message"] as? String) ?? (object["error"] as? String)
-    }
-
-}
-
 struct SharedNoteDocument: Equatable {
     let text: String
     let images: [NoteImage]
@@ -1419,7 +1305,6 @@ final class AppViewModel: ObservableObject {
     @Published var showingList = true
 
     let server: LocalTextShareServer
-    let publicShare = PublicTextShareClient()
     private var cancellables: Set<AnyCancellable> = []
 
     init() {
@@ -1468,10 +1353,6 @@ final class AppViewModel: ObservableObject {
     func stopSharing() {
         server.stopSharing()
         showingShareSheet = false
-    }
-
-    func publishPublicShare(password: String) {
-        publicShare.publish(text: text, images: currentNote.images, password: password)
     }
 
     func persistText() {
@@ -1527,9 +1408,15 @@ final class AppViewModel: ObservableObject {
         let changed = notes[index].text != newText || notes[index].images != images
         guard changed else { return }
 
+        let removedImageIDs = Set(notes[index].images.map(\.id))
+            .subtracting(Set(images.map(\.id)))
         notes[index].images = images
         notes[index].text = newText
         notes[index].modifiedAt = Date()
+        let stillReferencedImageIDs = Set(notes.flatMap { $0.images.map(\.id) })
+        for imageID in removedImageIDs where !stillReferencedImageIDs.contains(imageID) {
+            NoteImageStore.shared.removeImage(withID: imageID)
+        }
 
         // Keep the draft in memory while the UITextView is focused. It is
         // persisted from its end-editing / leave-page lifecycle instead of once
@@ -1561,12 +1448,8 @@ final class AppViewModel: ObservableObject {
 
 struct ShareAddressSheet: View {
     @ObservedObject var server: LocalTextShareServer
-    @ObservedObject var publicShare: PublicTextShareClient
-    let publishPublicShare: (String) -> Void
     let onClose: () -> Void
     @State private var showingCopiedToast = false
-    @State private var publicPassword = ""
-    @State private var isPublicPasswordVisible = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1630,96 +1513,6 @@ struct ShareAddressSheet: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    Divider().background(Color.retroMetadata.opacity(0.35))
-
-                    Text("公网限时分享")
-                        .font(.custom("Helvetica Neue Bold", size: 18))
-                        .foregroundColor(Color.retroMetadata)
-
-                    Text("每次创建都会立即使旧公网链接失效；新链接固定 10 分钟有效，打开时必须输入密码。")
-                        .font(.custom("Helvetica Neue Regular", size: 15))
-                        .foregroundColor(Color.retroMetadata)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    HStack(spacing: 0) {
-                        Group {
-                            if isPublicPasswordVisible {
-                                // A normal text field intentionally keeps third-party
-                                // keyboards available. iOS can restrict them for
-                                // secure-entry fields such as SecureField.
-                                TextField("设置访问密码", text: $publicPassword)
-                            } else {
-                                SecureField("设置访问密码", text: $publicPassword)
-                            }
-                        }
-                        .font(.system(size: 16))
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-
-                        Button(isPublicPasswordVisible ? "隐藏" : "显示") {
-                            isPublicPasswordVisible.toggle()
-                        }
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(Color.retroMetadata)
-                        .padding(.leading, 10)
-                    }
-                    .padding(10)
-                    .background(Color.white.opacity(0.48))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .stroke(Color.retroMetadata.opacity(0.55), lineWidth: 1)
-                    )
-                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                        .onChange(of: publicPassword) { value in
-                            if value.count > 8 {
-                                publicPassword = String(value.prefix(8))
-                            }
-                        }
-
-                    Button(action: { publishPublicShare(publicPassword) }) {
-                        HStack {
-                            if publicShare.isPublishing { ActivityIndicator() }
-                            Text("创建新的公网分享")
-                        }
-                        .font(.custom("Helvetica Neue Bold", size: 17))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
-                    }
-                    .disabled(publicShare.isPublishing)
-                    .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.12, green: 0.34, blue: 0.67)))
-
-                    if let publicURL = publicShare.shareURL {
-                        Text(publicURL.absoluteString)
-                            .font(.system(.body, design: .monospaced))
-                            .lineLimit(nil)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.white.opacity(0.42))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .stroke(Color.retroMetadata.opacity(0.55), lineWidth: 1)
-                            )
-
-                        if let expiresAt = publicShare.expiresAt {
-                            Text("有效期至：\(expiresAt)")
-                                .font(.footnote)
-                                .foregroundColor(Color.retroMetadata)
-                        } else {
-                            Text("有效期为 10 分钟；创建新链接后，当前链接将立即失效。")
-                                .font(.footnote)
-                                .foregroundColor(Color.retroMetadata)
-                        }
-
-                        Button("复制公网地址") { copy(publicURL) }
-                            .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.12, green: 0.34, blue: 0.67)))
-                    }
-
-                    if let publicError = publicShare.errorMessage {
-                        Text(publicError)
-                            .font(.footnote)
-                            .foregroundColor(Color(red: 0.62, green: 0.17, blue: 0.12))
-                    }
                     }
                     .padding(.bottom, 15)
                     }
@@ -1860,9 +1653,7 @@ struct ContentView: View {
             )
             if viewModel.showingShareSheet {
                 ShareAddressSheet(
-                    server: viewModel.server,
-                    publicShare: viewModel.publicShare,
-                    publishPublicShare: viewModel.publishPublicShare
+                    server: viewModel.server
                 ) {
                     viewModel.showingShareSheet = false
                 }
