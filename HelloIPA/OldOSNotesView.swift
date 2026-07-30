@@ -778,6 +778,10 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
                 guard let self, let textView else { return }
                 self.updateKeyboardAvoidance(for: textView, notification: notification)
             }
+            let didShowHandler: (Notification) -> Void = { [weak self, weak textView] _ in
+                guard let self, let textView else { return }
+                self.revealCaretAfterKeyboardPresentation(in: textView)
+            }
             keyboardObservers = [
                 center.addObserver(
                     forName: UIResponder.keyboardWillChangeFrameNotification,
@@ -790,6 +794,12 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
                     object: nil,
                     queue: .main,
                     using: handler
+                ),
+                center.addObserver(
+                    forName: UIResponder.keyboardDidShowNotification,
+                    object: nil,
+                    queue: .main,
+                    using: didShowHandler
                 )
             ]
         }
@@ -807,7 +817,14 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             textView.contentInset = inset
             textView.verticalScrollIndicatorInsets = inset
 
-            guard overlap > 0 else { return }
+        }
+
+        private func revealCaretAfterKeyboardPresentation(in textView: UITextView) {
+            guard textView.isFirstResponder else { return }
+            // Do not change contentOffset while a third-party keyboard is
+            // negotiating its own presentation frame. At this point UIKit has
+            // completed that transition, so revealing the caret cannot feed
+            // back into keyboard sizing or produce a blank keyboard area.
             DispatchQueue.main.async { [weak textView] in
                 guard let textView else { return }
                 textView.scrollRangeToVisible(textView.selectedRange)
