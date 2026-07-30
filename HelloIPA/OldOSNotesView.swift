@@ -67,7 +67,32 @@ private extension NSAttributedString.Key {
     static let helloIPANoteImageID = NSAttributedString.Key("HelloIPA.NoteImageID")
 }
 
-private final class AttachmentCaretReproductionTextView: DALinedTextView {
+private class ImageSafeTextView: DALinedTextView {
+    private static let attachmentCharacter: unichar = 0xFFFC
+
+    override func closestPosition(to point: CGPoint) -> UITextPosition? {
+        guard let proposed = super.closestPosition(to: point) else { return nil }
+        let location = offset(from: beginningOfDocument, to: proposed)
+        let text = attributedText.string as NSString
+        guard location >= 0, location <= text.length else { return proposed }
+
+        // A tap in the empty space to the right of an image normally resolves
+        // to one of the two insertion positions around U+FFFC. Both positions
+        // are attachment boundaries, not editable text. Move that tap to the
+        // first character of the following line instead.
+        let touchesAttachment =
+            (location < text.length && text.character(at: location) == Self.attachmentCharacter)
+            || (location > 0 && text.character(at: location - 1) == Self.attachmentCharacter)
+        guard touchesAttachment else { return proposed }
+
+        let searchRange = NSRange(location: min(location, text.length), length: text.length - min(location, text.length))
+        let nextLine = text.range(of: "\n", options: [], range: searchRange)
+        let destination = nextLine.location == NSNotFound ? text.length : nextLine.location + 1
+        return position(from: beginningOfDocument, offset: destination) ?? proposed
+    }
+}
+
+private final class AttachmentCaretReproductionTextView: ImageSafeTextView {
     var onAttachmentToWindow: ((DALinedTextView) -> Void)?
     private var hasAttachedToWindow = false
 
@@ -531,13 +556,6 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         .font: noteFont,
         .foregroundColor: UIColor.black
     ]
-    // A bare attachment is represented by one U+FFFC character. Tapping the
-    // empty part of its line can leave UITextView's caret exactly on that object
-    // replacement boundary, where TextKit has no editable glyph to anchor to.
-    // Keep an invisible ordinary-text character immediately after every image so
-    // the insertion point always belongs to a normal text run.
-    private static let attachmentCaretAnchor = "\u{200B}"
-
     private static var isAttachmentCaretReproductionEnabled: Bool {
         CommandLine.arguments.contains("-HelloIPA.AttachmentCaretReproduction")
             || ProcessInfo.processInfo.environment["HELLOIPA_ATTACHMENT_CARET_REPRODUCTION"] == "1"
@@ -592,12 +610,6 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             value: image.id.uuidString,
             range: NSRange(location: 0, length: result.length)
         )
-        result.append(
-            NSAttributedString(
-                string: attachmentCaretAnchor,
-                attributes: noteAttributes
-            )
-        )
         return result
     }
 
@@ -622,7 +634,6 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
 
             let segment = (attributedText.string as NSString).substring(with: range)
                 .replacingOccurrences(of: "\u{FFFC}", with: "")
-                .replacingOccurrences(of: attachmentCaretAnchor, with: "")
             plainText += segment
             plainUTF16Length += (segment as NSString).length
         }
@@ -652,7 +663,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
     func makeUIView(context: Context) -> DALinedTextView {
         let view: DALinedTextView = Self.isAttachmentCaretReproductionEnabled
             ? AttachmentCaretReproductionTextView()
-            : DALinedTextView()
+            : ImageSafeTextView()
         view.isScrollEnabled = true
         view.isEditable = true
         view.isUserInteractionEnabled = true
@@ -815,6 +826,31 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             scrollView.setNeedsDisplay()
+        }
+
+        func textView(
+            _ textView: UITextView,
+            shouldChangeTextIn range: NSRange,
+            replacementText replacementText: String
+        ) -> Bool {
+            // The insertion point after an image lives on the next line. Make
+            // Backspace there remove the image block as one unit, rather than
+            // allowing UITextView to step back onto the attachment boundary.
+            guard replacementText.isEmpty, range.length == 1 else { return true }
+            let text = textView.attributedText.string as NSString
+            guard range.location >= 1, range.location < text.length,
+                  text.character(at: range.location) == 0x0A,
+                  text.character(at: range.location - 1) == 0xFFFC else {
+                return true
+            }
+
+            textView.textStorage.replaceCharacters(
+                in: NSRange(location: range.location - 1, length: 2),
+                with: ""
+            )
+            textView.selectedRange = NSRange(location: range.location - 1, length: 0)
+            publishDocument(from: textView)
+            return false
         }
 
         func textView(
