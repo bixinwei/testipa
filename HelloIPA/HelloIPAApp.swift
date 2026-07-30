@@ -1524,11 +1524,15 @@ final class AppViewModel: ObservableObject {
         notes[index].text = newText
         notes[index].modifiedAt = Date()
 
+        // The UIKit editor reports a complete document in one callback.  Persist
+        // that model change here, rather than relying on `text.didSet`: by the
+        // time that observer runs, the note has already been updated above and
+        // it correctly treats the assignment as a no-op.
+        persistNotes()
+        server.updateSharedDocument(text: newText, images: images)
+
         if text != newText {
             text = newText
-        } else {
-            persistNotes()
-            server.updateSharedDocument(text: newText, images: images)
         }
     }
 

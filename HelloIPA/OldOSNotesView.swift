@@ -659,6 +659,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             maxImageWidth: Self.maximumImageWidth(in: view)
         )
         view.typingAttributes = Self.noteAttributes
+        context.coordinator.recordAppliedDocument(text: text, images: images)
         return view
     }
 
@@ -676,6 +677,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         if currentDocument.text != text || currentDocument.images != images {
             let selectedRange = uiView.selectedRange
             let contentOffset = uiView.contentOffset
+            context.coordinator.isApplyingModelDocument = true
             uiView.attributedText = Self.styledText(
                 text,
                 images: images,
@@ -688,7 +690,9 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
                 length: 0
             )
             uiView.setContentOffset(contentOffset, animated: false)
+            context.coordinator.isApplyingModelDocument = false
         }
+        context.coordinator.recordAppliedDocument(text: text, images: images)
 
         if let pendingImage = pendingImage,
            context.coordinator.lastInsertedPendingID != pendingImage.id {
@@ -702,6 +706,9 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         var onDocumentChange: (String, [NoteImage]) -> Void
         var lastInsertedPendingID: UUID?
         var headerController: UIHostingController<OldOSDestinationHeader>?
+        var isApplyingModelDocument = false
+        private var lastPublishedText = ""
+        private var lastPublishedImages: [NoteImage] = []
 
         init(
             isEditing: Binding<Bool>,
@@ -718,31 +725,20 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
+            // Keep the insertion attributes on the UIKit editing boundary.  Do
+            // not assign them from a selection-change callback: TextKit can
+            // re-enter selection/layout while the caret is next to an
+            // NSTextAttachment.
+            textView.typingAttributes = OldOSNotesMultilineTextView.noteAttributes
             isEditing = true
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
-            let document = OldOSNotesMultilineTextView.document(
-                from: textView.attributedText,
-                metadata: imageMetadata
-            )
-            imageMetadata = Dictionary(
-                uniqueKeysWithValues: document.images.map { ($0.id, $0) }
-            )
-            let selectedRange = textView.selectedRange
-            let contentOffset = textView.contentOffset
-            textView.attributedText = OldOSNotesMultilineTextView.styledText(
-                document.text,
-                images: document.images,
-                maxImageWidth: OldOSNotesMultilineTextView.maximumImageWidth(in: textView)
-            )
-            textView.typingAttributes = OldOSNotesMultilineTextView.noteAttributes
-            textView.selectedRange = NSRange(
-                location: min(selectedRange.location, textView.attributedText.length),
-                length: 0
-            )
-            textView.setContentOffset(contentOffset, animated: false)
-            onDocumentChange(document.text, document.images)
+            // Replacing attributedText while TextKit is resigning first
+            // responder invalidates attachment layout and can leave a caret
+            // beside an image without an input view.  The text storage is
+            // already canonical; publish it without rebuilding it.
+            publishDocument(from: textView)
             isEditing = false
         }
 
@@ -786,7 +782,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             payload.append(NSAttributedString(string: "\n", attributes: OldOSNotesMultilineTextView.noteAttributes))
 
             mutable.replaceCharacters(in: selectedRange, with: payload)
-            textView.attributedText = mutable
+            textView.textStorage.setAttributedString(mutable)
             textView.typingAttributes = OldOSNotesMultilineTextView.noteAttributes
             textView.selectedRange = NSRange(
                 location: selectedRange.location + payload.length,
@@ -797,6 +793,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         }
 
         private func publishDocument(from textView: UITextView) {
+            guard !isApplyingModelDocument else { return }
             let document = OldOSNotesMultilineTextView.document(
                 from: textView.attributedText,
                 metadata: imageMetadata
@@ -804,7 +801,17 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             imageMetadata = Dictionary(
                 uniqueKeysWithValues: document.images.map { ($0.id, $0) }
             )
+            guard document.text != lastPublishedText || document.images != lastPublishedImages else {
+                return
+            }
+            lastPublishedText = document.text
+            lastPublishedImages = document.images
             onDocumentChange(document.text, document.images)
+        }
+
+        func recordAppliedDocument(text: String, images: [NoteImage]) {
+            lastPublishedText = text
+            lastPublishedImages = images
         }
     }
 }
