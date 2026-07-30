@@ -482,34 +482,20 @@ struct OldOSNotesDestinationView: View {
     let pendingImage: PendingNoteImage?
     var body: some View {
         GeometryReader { geometry in
-            ZStack {
-                VStack(spacing: 0) {
-                    OldOSNotesMultilineTextView(
-                        documentID: viewModel.currentNote.id,
-                        text: viewModel.text,
-                        images: viewModel.currentNote.images,
-                        metadata: metadata,
-                        isEditing: $isEditingNote,
-                        pendingImage: pendingImage,
-                        onDocumentChange: viewModel.updateSelectedDocument,
-                        onCommit: viewModel.persistText
-                    )
-                    .edgesIgnoringSafeArea(.bottom)
-                }
-                .overlay(
-                    VStack {
-                        Spacer()
-                        Image("gradBottomMarginThin")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: geometry.size.width + 4)
-                            .clipped()
-                    }
+            VStack(spacing: 0) {
+                OldOSNotesMultilineTextView(
+                    documentID: viewModel.currentNote.id,
+                    text: viewModel.text,
+                    images: viewModel.currentNote.images,
+                    metadata: metadata,
+                    isEditing: $isEditingNote,
+                    pendingImage: pendingImage,
+                    onDocumentChange: viewModel.updateSelectedDocument,
+                    onCommit: viewModel.persistText
                 )
-                .overlay(
-                    VStack {
-                        Spacer()
-                        HStack(spacing: 0) {
+                .frame(maxHeight: .infinity)
+
+                HStack(spacing: 0) {
                             Spacer()
                             Button(action: { viewModel.moveSelection(by: -1) }) {
                                 Image("arrow left")
@@ -540,23 +526,20 @@ struct OldOSNotesDestinationView: View {
                             }
                             .disabled(!viewModel.canMoveNext)
                             Spacer()
-                        }
-                        .frame(height: 48)
-                        .padding(.top, 24)
-                        .padding(.bottom, 30)
-                        // This is a real toolbar surface, not a transparent
-                        // overlay: it preserves the 24 pt gap above the
-                        // controls and prevents editor text from showing
-                        // through the toolbar while scrolling.
-                        .background(
-                            Image("bodyMarginThin-568h")
-                                .resizable(
-                                    capInsets: EdgeInsets(top: 0, leading: 25, bottom: 0, trailing: 1),
-                                    resizingMode: .stretch
-                                )
-                        )
-                    }
-                )
+                }
+                .frame(height: 48)
+                .padding(.top, 12)
+                .padding(.bottom, 30)
+            }
+            // The editor and toolbar share this one page background. The
+            // toolbar is in normal layout below the editor, so text cannot
+            // scroll beneath it and the paper texture remains continuous.
+            .background(alignment: .bottom) {
+                Image("gradBottomMarginThin")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: geometry.size.width + 4)
+                    .clipped()
             }
         }
         // OldOS rendered this 320 pt-wide asset inside its shorter, simulated
