@@ -804,27 +804,14 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             let overlap = max(0, textViewFrame.intersection(keyboardFrame).height)
             var inset = baseContentInset
             inset.bottom += overlap
-            let applyKeyboardLayout = {
-                textView.contentInset = inset
-                textView.verticalScrollIndicatorInsets = inset
-                if overlap > 0 {
-                    textView.scrollRangeToVisible(textView.selectedRange)
-                }
-            }
+            textView.contentInset = inset
+            textView.verticalScrollIndicatorInsets = inset
 
-            // Match the keyboard's own timing instead of applying the inset on
-            // one run-loop turn and scrolling the caret on the next one.
-            let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
-            let curve = (notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue
-                ?? UInt(UIView.AnimationCurve.easeInOut.rawValue)
-            let options = UIView.AnimationOptions(rawValue: curve << 16)
-                .union(.beginFromCurrentState)
-            UIView.animate(
-                withDuration: duration,
-                delay: 0,
-                options: options,
-                animations: applyKeyboardLayout
-            )
+            guard overlap > 0 else { return }
+            DispatchQueue.main.async { [weak textView] in
+                guard let textView else { return }
+                textView.scrollRangeToVisible(textView.selectedRange)
+            }
         }
 
         func textViewDidChange(_ textView: UITextView) {
