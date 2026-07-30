@@ -115,6 +115,7 @@ struct OldOSNotesRootView: View {
                     isDestination: !viewModel.showingList,
                     forwardOrBackward: forwardOrBackward,
                     backAction: {
+                        viewModel.persistText()
                         isEditingNote = false
                         forwardOrBackward = true
                         withAnimation(.linear(duration: 0.28)) {
@@ -389,7 +390,8 @@ struct OldOSNotesDestinationView: View {
                         metadata: metadata,
                         isEditing: $isEditingNote,
                         pendingImage: pendingImage,
-                        onDocumentChange: viewModel.updateSelectedDocument
+                        onDocumentChange: viewModel.updateSelectedDocument,
+                        onCommit: viewModel.persistText
                     )
                     .padding(.bottom, keyboard.currentHeight)
                     .edgesIgnoringSafeArea(.bottom)
@@ -515,6 +517,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
     @Binding var isEditing: Bool
     let pendingImage: PendingNoteImage?
     let onDocumentChange: (String, [NoteImage]) -> Void
+    let onCommit: () -> Void
 
     private static let noteFont = UIFont(name: "Noteworthy-Bold", size: 19)
         ?? .systemFont(ofSize: 19, weight: .bold)
@@ -610,7 +613,8 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         Coordinator(
             isEditing: $isEditing,
             images: images,
-            onDocumentChange: onDocumentChange
+            onDocumentChange: onDocumentChange,
+            onCommit: onCommit
         )
     }
 
@@ -666,15 +670,22 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
     func updateUIView(_ uiView: DALinedTextView, context: Context) {
         context.coordinator.headerController?.rootView = OldOSDestinationHeader(metadata: metadata)
         context.coordinator.onDocumentChange = onDocumentChange
+        context.coordinator.onCommit = onCommit
         for image in images {
             context.coordinator.imageMetadata[image.id] = image
         }
 
-        let currentDocument = Self.document(
-            from: uiView.attributedText,
-            metadata: context.coordinator.imageMetadata
-        )
-        if currentDocument.text != text || currentDocument.images != images {
+        // UITextView owns its text storage for an active edit session. SwiftUI
+        // publishes `notes`, `text`, and the modified date separately; applying
+        // one of those intermediate snapshots back into an attachment-backed
+        // text view is what made the caret after an image repeatedly relayout
+        // and crash. Reconcile only when UIKit is not actively editing.
+        if !context.coordinator.isUserEditingSession {
+            let currentDocument = Self.document(
+                from: uiView.attributedText,
+                metadata: context.coordinator.imageMetadata
+            )
+            if currentDocument.text != text || currentDocument.images != images {
             let selectedRange = uiView.selectedRange
             let contentOffset = uiView.contentOffset
             context.coordinator.isApplyingModelDocument = true
@@ -691,8 +702,9 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             )
             uiView.setContentOffset(contentOffset, animated: false)
             context.coordinator.isApplyingModelDocument = false
+            }
+            context.coordinator.recordAppliedDocument(text: text, images: images)
         }
-        context.coordinator.recordAppliedDocument(text: text, images: images)
 
         if let pendingImage = pendingImage,
            context.coordinator.lastInsertedPendingID != pendingImage.id {
@@ -704,20 +716,24 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         @Binding private var isEditing: Bool
         var imageMetadata: [UUID: NoteImage]
         var onDocumentChange: (String, [NoteImage]) -> Void
+        var onCommit: () -> Void
         var lastInsertedPendingID: UUID?
         var headerController: UIHostingController<OldOSDestinationHeader>?
         var isApplyingModelDocument = false
+        var isUserEditingSession = false
         private var lastPublishedText = ""
         private var lastPublishedImages: [NoteImage] = []
 
         init(
             isEditing: Binding<Bool>,
             images: [NoteImage],
-            onDocumentChange: @escaping (String, [NoteImage]) -> Void
+            onDocumentChange: @escaping (String, [NoteImage]) -> Void,
+            onCommit: @escaping () -> Void
         ) {
             _isEditing = isEditing
             imageMetadata = Dictionary(uniqueKeysWithValues: images.map { ($0.id, $0) })
             self.onDocumentChange = onDocumentChange
+            self.onCommit = onCommit
         }
 
         func textViewDidChange(_ textView: UITextView) {
@@ -730,6 +746,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             // re-enter selection/layout while the caret is next to an
             // NSTextAttachment.
             textView.typingAttributes = OldOSNotesMultilineTextView.noteAttributes
+            isUserEditingSession = true
             isEditing = true
         }
 
@@ -739,6 +756,8 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             // beside an image without an input view.  The text storage is
             // already canonical; publish it without rebuilding it.
             publishDocument(from: textView)
+            isUserEditingSession = false
+            onCommit()
             isEditing = false
         }
 
@@ -757,6 +776,14 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         }
 
         func insert(_ image: NoteImage, into textView: UITextView) {
+            // An image picker normally leaves the text view without first
+            // responder status. Re-enter the standard UITextView editing
+            // session before mutating its attachment-backed text storage, so
+            // the newly inserted image and the following caret share one
+            // stable TextKit layout and UIKit presents the keyboard normally.
+            if !textView.isFirstResponder {
+                textView.becomeFirstResponder()
+            }
             imageMetadata[image.id] = image
             let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
             let selectedRange = NSRange(
@@ -813,6 +840,14 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             lastPublishedText = text
             lastPublishedImages = images
         }
+
+        func commitIfNeeded() {
+            onCommit()
+        }
+    }
+
+    static func dismantleUIView(_ uiView: DALinedTextView, coordinator: Coordinator) {
+        coordinator.commitIfNeeded()
     }
 }
 

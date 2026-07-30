@@ -1475,16 +1475,23 @@ final class AppViewModel: ObservableObject {
     }
 
     func persistText() {
-        updateSelectedNote()
+        // While an editor is focused its UITextView is the authoritative draft.
+        // `updateSelectedDocument` has already copied that draft into the
+        // selected note, so saving here must not depend on `text.didSet` seeing
+        // another string change.
+        persistNotes()
+        server.updateSharedDocument(text: text, images: currentNote.images)
     }
 
     func select(_ note: Note) {
+        persistText()
         selectedNoteID = note.id
         text = note.text
         showingList = false
     }
 
     func createNote() {
+        persistText()
         let note = Note(text: "")
         notes.insert(note, at: 0)
         selectedNoteID = note.id
@@ -1524,11 +1531,9 @@ final class AppViewModel: ObservableObject {
         notes[index].text = newText
         notes[index].modifiedAt = Date()
 
-        // The UIKit editor reports a complete document in one callback.  Persist
-        // that model change here, rather than relying on `text.didSet`: by the
-        // time that observer runs, the note has already been updated above and
-        // it correctly treats the assignment as a no-op.
-        persistNotes()
+        // Keep the draft in memory while the UITextView is focused. It is
+        // persisted from its end-editing / leave-page lifecycle instead of once
+        // per keystroke.
         server.updateSharedDocument(text: newText, images: images)
 
         if text != newText {
