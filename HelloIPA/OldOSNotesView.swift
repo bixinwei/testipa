@@ -676,6 +676,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         context.coordinator.headerController = headerController
 
         view.textContainerInset = UIEdgeInsets(top: 40, left: 28, bottom: 30, right: 3)
+        context.coordinator.installKeyboardAvoidance(on: view)
         context.coordinator.imageMetadata = Dictionary(
             uniqueKeysWithValues: images.map { ($0.id, $0) }
         )
@@ -745,6 +746,9 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         var isUserEditingSession = false
         private var lastPublishedText = ""
         private var lastPublishedImages: [NoteImage] = []
+        private weak var keyboardTextView: UITextView?
+        private var keyboardObservers: [NSObjectProtocol] = []
+        private var baseContentInset = UIEdgeInsets.zero
 
         init(
             isEditing: Binding<Bool>,
@@ -756,6 +760,58 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             imageMetadata = Dictionary(uniqueKeysWithValues: images.map { ($0.id, $0) })
             self.onDocumentChange = onDocumentChange
             self.onCommit = onCommit
+        }
+
+        deinit {
+            keyboardObservers.forEach(NotificationCenter.default.removeObserver)
+        }
+
+        // UITextView is already a scroll view. Keep its frame and text layout
+        // untouched, and use the documented scroll-view content inset to make
+        // the active line visible above the keyboard.
+        func installKeyboardAvoidance(on textView: UITextView) {
+            guard keyboardTextView == nil else { return }
+            keyboardTextView = textView
+            baseContentInset = textView.contentInset
+            let center = NotificationCenter.default
+            let handler: (Notification) -> Void = { [weak self, weak textView] notification in
+                guard let self, let textView else { return }
+                self.updateKeyboardAvoidance(for: textView, notification: notification)
+            }
+            keyboardObservers = [
+                center.addObserver(
+                    forName: UIResponder.keyboardWillChangeFrameNotification,
+                    object: nil,
+                    queue: .main,
+                    using: handler
+                ),
+                center.addObserver(
+                    forName: UIResponder.keyboardWillHideNotification,
+                    object: nil,
+                    queue: .main,
+                    using: handler
+                )
+            ]
+        }
+
+        private func updateKeyboardAvoidance(for textView: UITextView, notification: Notification) {
+            guard let window = textView.window,
+                  let keyboardFrameInScreen = (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else {
+                return
+            }
+            let keyboardFrame = window.convert(keyboardFrameInScreen, from: nil)
+            let textViewFrame = textView.convert(textView.bounds, to: window)
+            let overlap = max(0, textViewFrame.intersection(keyboardFrame).height)
+            var inset = baseContentInset
+            inset.bottom += overlap
+            textView.contentInset = inset
+            textView.verticalScrollIndicatorInsets = inset
+
+            guard overlap > 0 else { return }
+            DispatchQueue.main.async { [weak textView] in
+                guard let textView else { return }
+                textView.scrollRangeToVisible(textView.selectedRange)
+            }
         }
 
         func textViewDidChange(_ textView: UITextView) {
