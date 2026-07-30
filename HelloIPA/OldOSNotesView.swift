@@ -668,12 +668,21 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         context.coordinator.recordAppliedDocument(text: text, images: images)
         if CommandLine.arguments.contains("-HelloIPA.AttachmentCaretReproduction")
             || ProcessInfo.processInfo.environment["HELLOIPA_ATTACHMENT_CARET_REPRODUCTION"] == "1" {
-            DispatchQueue.main.async {
+            // UITextView cannot become first responder until it is attached to
+            // the scene. Delaying one run-loop turn was insufficient on a cold
+            // simulator launch, so wait until the normal window lifecycle is
+            // complete before exercising the real keyboard/caret path.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 let attachmentLocation = (view.attributedText.string as NSString)
                     .range(of: "\u{FFFC}")
                     .location
                 guard attachmentLocation != NSNotFound else { return }
-                view.becomeFirstResponder()
+                guard view.window != nil else {
+                    NSLog("HelloIPA caret reproduction: text view is not attached to a window")
+                    return
+                }
+                let becameFirstResponder = view.becomeFirstResponder()
+                NSLog("HelloIPA caret reproduction: becomeFirstResponder=%@", becameFirstResponder.description)
                 // This is the logical insertion location immediately to the
                 // attachment's right, matching the real-device failure case.
                 view.selectedRange = NSRange(location: attachmentLocation + 1, length: 0)
