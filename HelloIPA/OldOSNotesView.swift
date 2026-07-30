@@ -40,7 +40,12 @@ final class NoteImageStore {
 
     func previewImage(for id: UUID) -> UIImage? {
         guard let data = previewData(for: id) else { return nil }
-        return UIImage(data: data)
+        // Preview JPEGs have no UIKit scale metadata. Treating them as 1×
+        // makes a 1600 px image look 1600 pt wide, so NSTextAttachment must
+        // continuously downscale a huge texture while scrolling on a 3× phone.
+        // Decode at the active screen scale so its point size matches the
+        // actual display density before attachment layout begins.
+        return UIImage(data: data, scale: UIScreen.main.scale)
     }
 
     func removeImage(withID id: UUID) {
