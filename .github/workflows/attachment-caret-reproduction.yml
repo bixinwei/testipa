@@ -47,7 +47,8 @@ jobs:
           xcrun simctl spawn "$SIM_DEVICE_UDID" log stream --style compact --predicate 'process == "HelloIPA"' > build/attachment-caret-diagnostics/live.log 2>&1 &
           LOG_PID=$!
           trap 'kill "$LOG_PID" 2>/dev/null || true' EXIT
-          xcrun simctl launch "$SIM_DEVICE_UDID" com.example.helloipa -HelloIPA.AttachmentCaretReproduction
+          SIMCTL_CHILD_HELLOIPA_ATTACHMENT_CARET_REPRODUCTION=1 \
+            xcrun simctl launch "$SIM_DEVICE_UDID" com.example.helloipa
           sleep 12
           xcrun simctl io "$SIM_DEVICE_UDID" screenshot build/attachment-caret-diagnostics/after-caret.png || true
           xcrun simctl spawn "$SIM_DEVICE_UDID" log show --last 2m --style compact --predicate 'process == "HelloIPA" OR eventMessage CONTAINS[c] "HelloIPA"' > build/attachment-caret-diagnostics/system.log || true

@@ -2059,7 +2059,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         if CommandLine.arguments.contains("-HelloIPA.ShowShare") {
             viewModel.showingShareSheet = true
         }
-        if CommandLine.arguments.contains("-HelloIPA.AttachmentCaretReproduction") {
+        if CommandLine.arguments.contains("-HelloIPA.AttachmentCaretReproduction")
+            || ProcessInfo.processInfo.environment["HELLOIPA_ATTACHMENT_CARET_REPRODUCTION"] == "1" {
             viewModel.prepareAttachmentCaretReproduction()
         }
 #endif
