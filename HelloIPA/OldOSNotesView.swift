@@ -111,7 +111,7 @@ struct OldOSNotesRootView: View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 OldOSNotesTitleBar(
-                    title: viewModel.showingList ? "Notes (\(viewModel.notes.filter { !$0.text.isEmpty || !$0.images.isEmpty }.count))" : viewModel.currentNote.title,
+                    title: viewModel.showingList ? "Notes (\(viewModel.notes.count))" : viewModel.currentNote.title,
                     isDestination: !viewModel.showingList,
                     forwardOrBackward: forwardOrBackward,
                     backAction: {
@@ -311,7 +311,6 @@ struct OldOSNotesMainView: View {
 
     private var notes: [Note] {
         viewModel.notes
-            .filter { !$0.text.isEmpty || !$0.images.isEmpty }
             .sorted { $0.modifiedAt > $1.modifiedAt }
     }
 
@@ -745,10 +744,6 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             textView.setContentOffset(contentOffset, animated: false)
             onDocumentChange(document.text, document.images)
             isEditing = false
-        }
-
-        func textViewDidChangeSelection(_ textView: UITextView) {
-            textView.typingAttributes = OldOSNotesMultilineTextView.noteAttributes
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
