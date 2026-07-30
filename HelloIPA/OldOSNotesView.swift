@@ -727,6 +727,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
 
         view.textContainerInset = UIEdgeInsets(top: 40, left: 28, bottom: 30, right: 3)
         context.coordinator.installKeyboardAvoidance(on: view)
+        context.coordinator.installLineRefresh(on: view)
         context.coordinator.imageMetadata = Dictionary(
             uniqueKeysWithValues: images.map { ($0.id, $0) }
         )
@@ -827,6 +828,9 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         private weak var keyboardTextView: UITextView?
         private var keyboardObservers: [NSObjectProtocol] = []
         private var baseContentInset = UIEdgeInsets.zero
+        private weak var linedTextView: DALinedTextView?
+        private var lineRefreshLink: CADisplayLink?
+        private var needsLineRefresh = false
 
         init(
             documentID: UUID,
@@ -844,6 +848,39 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
 
         deinit {
             keyboardObservers.forEach(NotificationCenter.default.removeObserver)
+            lineRefreshLink?.invalidate()
+        }
+
+        // DALinedTextView's paper rules must track contentOffset, but asking it
+        // to redraw from every UIScrollView callback can schedule several full
+        // view redraws in one display frame. Coalesce those callbacks onto the
+        // display's own cadence, including ProMotion's maximum refresh rate.
+        func installLineRefresh(on textView: DALinedTextView) {
+            guard lineRefreshLink == nil else { return }
+            linedTextView = textView
+            let link = CADisplayLink(target: self, selector: #selector(refreshPaperRules))
+            if #available(iOS 15.0, *) {
+                let maximum = Float(UIScreen.main.maximumFramesPerSecond)
+                link.preferredFrameRateRange = CAFrameRateRange(
+                    minimum: 60,
+                    maximum: maximum,
+                    preferred: maximum
+                )
+            } else {
+                link.preferredFramesPerSecond = UIScreen.main.maximumFramesPerSecond
+            }
+            link.add(to: .main, forMode: .common)
+            link.isPaused = true
+            lineRefreshLink = link
+        }
+
+        @objc private func refreshPaperRules() {
+            guard needsLineRefresh, let linedTextView else {
+                lineRefreshLink?.isPaused = true
+                return
+            }
+            needsLineRefresh = false
+            linedTextView.setNeedsDisplay()
         }
 
         // UITextView is already a scroll view. Keep its frame and text layout
@@ -937,7 +974,9 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            scrollView.setNeedsDisplay()
+            guard scrollView === linedTextView else { return }
+            needsLineRefresh = true
+            lineRefreshLink?.isPaused = false
         }
 
         func textView(
