@@ -349,7 +349,24 @@ final class DuplicateScanner: ObservableObject {
             return ScanResult(groups: [], scannedFiles: scanned, reusedHashes: 0, newlyHashed: 0, pendingHashes: 0, cache: [:], errorMessage: "无法再次读取该文件夹，请重新通过“选择文件夹”授权。")
         }
 
-        var filesBySize: [Int64: [DiskFile]] = [:]
+        var firstFileByDigest: [String: DiskFile] = [:]
+        var duplicateFilesByDigest: [String: [DiskFile]] = [:]
+        var nextCache: [String: CachedDigest] = [:]
+        var pendingHashCount = 0
+        var reused = 0
+        var newlyHashed = 0
+
+        func record(_ file: DiskFile, withDigest digest: String) {
+            if var duplicateFiles = duplicateFilesByDigest[digest] {
+                duplicateFiles.append(file)
+                duplicateFilesByDigest[digest] = duplicateFiles
+            } else if let firstFile = firstFileByDigest.removeValue(forKey: digest) {
+                duplicateFilesByDigest[digest] = [firstFile, file]
+            } else {
+                firstFileByDigest[digest] = file
+            }
+        }
+
         for case let url as URL in detailEnumerator {
             autoreleasepool {
                 let cacheKey = relativePath(of: url, from: root)
@@ -368,43 +385,31 @@ final class DuplicateScanner: ObservableObject {
                 else if contentType?.conforms(to: .movie) == true { kind = .video }
                 else { kind = .file }
                 let modificationTime = values.contentModificationDate?.timeIntervalSince1970 ?? 0
-                filesBySize[size, default: []].append(
-                    DiskFile(url: url, size: size, type: kind, cacheKey: cacheKey, modificationTime: modificationTime)
-                )
-            }
-        }
+                let file = DiskFile(url: url, size: size, type: kind, cacheKey: cacheKey, modificationTime: modificationTime)
 
-        var byDigest: [String: [DiskFile]] = [:]
-        var nextCache: [String: CachedDigest] = [:]
-        var filesToHash: [DiskFile] = []
-        var pendingHashCount = 0
-        var reused = 0
-        for candidates in filesBySize.values {
-            for file in candidates {
                 if let cached = cachedDigests[file.cacheKey], cached.matches(file) {
-                    byDigest[cached.md5, default: []].append(file)
+                    record(file, withDigest: cached.md5)
                     nextCache[file.cacheKey] = cached
                     reused += 1
-                } else if filesToHash.count < maximumNewHashes {
-                    filesToHash.append(file)
+                } else if newlyHashed < maximumNewHashes {
+                    newlyHashed += 1
+                    guard let digest = md5(of: file.url) else { return }
+                    record(file, withDigest: digest)
+                    nextCache[file.cacheKey] = CachedDigest(size: file.size, modificationTime: file.modificationTime, md5: digest)
                 } else {
                     pendingHashCount += 1
                 }
             }
         }
-        for file in filesToHash {
-            guard let digest = md5(of: file.url) else { continue }
-            byDigest[digest, default: []].append(file)
-            nextCache[file.cacheKey] = CachedDigest(size: file.size, modificationTime: file.modificationTime, md5: digest)
-        }
-        let groups = byDigest.compactMap { digest, files -> DuplicateGroup? in
-            files.count > 1 ? DuplicateGroup(key: "md5-\(digest)", files: files) : nil
+
+        let groups = duplicateFilesByDigest.compactMap { digest, files -> DuplicateGroup? in
+            DuplicateGroup(key: "md5-\(digest)", files: files)
         }.sorted { $0.spaceToRecover > $1.spaceToRecover }
         return ScanResult(
             groups: groups,
             scannedFiles: scanned,
             reusedHashes: reused,
-            newlyHashed: filesToHash.count,
+            newlyHashed: newlyHashed,
             pendingHashes: pendingHashCount,
             cache: nextCache,
             errorMessage: nil
