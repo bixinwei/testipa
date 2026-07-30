@@ -660,7 +660,6 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         view.tintColor = UIColor(red: 113/255, green: 93/255, blue: 81/255, alpha: 1)
         view.showsVerticalScrollIndicator = false
         view.showsHorizontalScrollIndicator = false
-        context.coordinator.installKeyboardInsetHandling(on: view)
 
         let headerController = UIHostingController(rootView: OldOSDestinationHeader(metadata: metadata))
         let header = headerController.view!
@@ -763,9 +762,6 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         var isUserEditingSession = false
         private var lastPublishedText = ""
         private var lastPublishedImages: [NoteImage] = []
-        private weak var keyboardInsetTextView: UITextView?
-        private var keyboardObservers: [NSObjectProtocol] = []
-        private var baseContentInset = UIEdgeInsets.zero
 
         init(
             isEditing: Binding<Bool>,
@@ -777,67 +773,6 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             imageMetadata = Dictionary(uniqueKeysWithValues: images.map { ($0.id, $0) })
             self.onDocumentChange = onDocumentChange
             self.onCommit = onCommit
-        }
-
-        deinit {
-            keyboardObservers.forEach(NotificationCenter.default.removeObserver)
-        }
-
-        // Keep the UITextView's frame stable while the keyboard comes and goes.
-        // Resizing the SwiftUI representable at the same time TextKit lays out a
-        // large attachment makes its selected range and glyph layout re-enter
-        // each other. UIKit's documented solution for a scroll view is to adjust
-        // its content inset, leaving the text container itself unchanged.
-        func installKeyboardInsetHandling(on textView: UITextView) {
-            guard keyboardInsetTextView == nil else { return }
-            keyboardInsetTextView = textView
-            baseContentInset = textView.contentInset
-            let center = NotificationCenter.default
-            let handler: (Notification) -> Void = { [weak self, weak textView] notification in
-                guard let self, let textView else { return }
-                self.updateKeyboardInset(on: textView, notification: notification)
-            }
-            keyboardObservers = [
-                center.addObserver(
-                    forName: UIResponder.keyboardWillChangeFrameNotification,
-                    object: nil,
-                    queue: .main,
-                    using: handler
-                ),
-                center.addObserver(
-                    forName: UIResponder.keyboardWillHideNotification,
-                    object: nil,
-                    queue: .main,
-                    using: handler
-                )
-            ]
-        }
-
-        private func updateKeyboardInset(on textView: UITextView, notification: Notification) {
-            guard let window = textView.window,
-                  let keyboardFrame = (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else {
-                return
-            }
-            let textViewFrame = textView.convert(textView.bounds, to: window)
-            let overlap = max(0, textViewFrame.intersection(keyboardFrame).height)
-            var inset = baseContentInset
-            inset.bottom += overlap
-
-            let applyInsets = {
-                textView.contentInset = inset
-                textView.verticalScrollIndicatorInsets = inset
-            }
-            guard let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval,
-                  let curveValue = notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt else {
-                applyInsets()
-                return
-            }
-            UIView.animate(
-                withDuration: duration,
-                delay: 0,
-                options: UIView.AnimationOptions(rawValue: curveValue << 16),
-                animations: applyInsets
-            )
         }
 
         func textViewDidChange(_ textView: UITextView) {
