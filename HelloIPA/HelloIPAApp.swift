@@ -679,6 +679,15 @@ final class LocalTextShareServer: ObservableObject {
                         body: Data(body.utf8)
                     )
                 } else if request.requestLine.hasPrefix("GET "),
+                          request.path == "/paper",
+                          let paperData = UIImage(named: "bodyMarginThin-568h")?.pngData() {
+                    response = self.httpDataResponse(
+                        statusLine: "HTTP/1.1 200 OK\r\n",
+                        contentType: "image/png",
+                        body: paperData,
+                        additionalHeaders: ["Cache-Control": "private, max-age=3600"]
+                    )
+                } else if request.requestLine.hasPrefix("GET "),
                           let imageID = Self.previewImageID(from: request.path),
                           self.currentImages.contains(where: { $0.id == imageID }),
                           let previewData = NoteImageStore.shared.previewData(for: imageID) {
@@ -771,8 +780,8 @@ final class LocalTextShareServer: ObservableObject {
           <style>
             :root {
               color-scheme: light;
-              --bg: #f4f1ea;
-              --card: #fffdf8;
+              --bg: #ffffff;
+              --card: #ffffff;
               --text: #1f1a14;
               --muted: #786b5d;
               --line: #e5d7c5;
@@ -782,22 +791,20 @@ final class LocalTextShareServer: ObservableObject {
               margin: 0;
               min-height: 100vh;
               font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-              background:
-                radial-gradient(circle at top left, rgba(214, 177, 114, 0.22), transparent 32%),
-                linear-gradient(180deg, #fbf7ef 0%, var(--bg) 100%);
+              background: var(--bg);
               color: var(--text);
-              display: flex;
-              align-items: center;
+              display: block;
               justify-content: center;
               padding: 24px;
             }
             .card {
               width: min(760px, 100%);
               background: var(--card);
-              border: 1px solid var(--line);
-              border-radius: 24px;
+              border: 0;
+              border-radius: 0;
               padding: 28px;
-              box-shadow: 0 24px 60px rgba(70, 48, 21, 0.12);
+              box-shadow: none;
+              margin: 0 auto;
             }
             .eyebrow {
               margin: 0 0 8px;
@@ -813,21 +820,25 @@ final class LocalTextShareServer: ObservableObject {
             .document-editor {
               width: 100%;
               min-height: 260px;
-              padding: 16px;
-              border-radius: 18px;
-              border: 1px solid var(--line);
-              background: #fff;
+              padding: 40px 28px 30px;
+              border-radius: 0;
+              border: 0;
+              background-color: #fff8c4;
+              background-image: url('/paper');
+              background-repeat: repeat-y;
+              background-size: 100% auto;
+              background-position: left top;
               color: var(--text);
-              font: inherit;
-              font-size: 17px;
+              font-family: "Noteworthy", "Marker Felt", "Comic Sans MS", cursive;
+              font-size: 19px;
+              font-weight: 700;
               line-height: 1.6;
               white-space: pre-wrap;
               overflow-wrap: anywhere;
               outline: none;
             }
             .document-editor:focus {
-              border-color: #9bbcf1;
-              box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.12);
+              box-shadow: inset 0 0 0 1px rgba(121, 92, 62, 0.28);
             }
             button {
               margin-top: 16px;
@@ -856,18 +867,19 @@ final class LocalTextShareServer: ObservableObject {
             }
             .image-block {
               margin: 14px 0;
-              display: inline-block;
-              width: fit-content;
+              display: block;
+              width: 80%;
               max-width: 80%;
               white-space: normal;
               vertical-align: top;
             }
             .image-block img {
               display: block;
+              width: auto;
               max-width: 100%;
               height: auto;
-              border-radius: 10px;
-              border: 1px solid var(--line);
+              border-radius: 0;
+              border: 0;
             }
           </style>
         </head>
