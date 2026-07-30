@@ -47,8 +47,13 @@ jobs:
           xcrun simctl spawn "$SIM_DEVICE_UDID" log stream --style compact --predicate 'process == "HelloIPA"' > build/attachment-caret-diagnostics/live.log 2>&1 &
           LOG_PID=$!
           trap 'kill "$LOG_PID" 2>/dev/null || true' EXIT
+          # `simctl launch` can itself wait forever when the app's main thread
+          # deadlocks during the first-responder transition. Bound it so the
+          # following screenshot and log collection still run and distinguish an
+          # app freeze from a stalled diagnostic command.
           SIMCTL_CHILD_HELLOIPA_ATTACHMENT_CARET_REPRODUCTION=1 \
-            xcrun simctl launch "$SIM_DEVICE_UDID" com.example.helloipa
+            perl -e '$seconds = shift @ARGV; alarm $seconds; exec @ARGV' 20 \
+            xcrun simctl launch "$SIM_DEVICE_UDID" com.example.helloipa || true
           sleep 12
           # A frozen app can make simctl I/O wait indefinitely. Keep collecting
           # the scene evidence, but bound each collection command so the logs
