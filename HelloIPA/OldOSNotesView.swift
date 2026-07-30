@@ -456,11 +456,6 @@ struct OldOSNotesMainView: View {
             }
             .overlay(
                 VStack {
-                    Image("NotesEdgeTop")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: geometry.size.width)
-                        .clipped()
                     Spacer()
                     Image("NotesEdgeBottom")
                         .resizable()
