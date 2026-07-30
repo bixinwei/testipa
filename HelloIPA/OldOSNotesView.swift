@@ -444,6 +444,7 @@ struct OldOSNotesDestinationView: View {
             ZStack {
                 VStack(spacing: 0) {
                     OldOSNotesMultilineTextView(
+                        documentID: viewModel.currentNote.id,
                         text: viewModel.text,
                         images: viewModel.currentNote.images,
                         metadata: metadata,
@@ -569,6 +570,7 @@ struct OldOSDestinationHeader: View {
 }
 
 struct OldOSNotesMultilineTextView: UIViewRepresentable {
+    let documentID: UUID
     let text: String
     let images: [NoteImage]
     let metadata: OldOSDestinationMetadata
@@ -612,9 +614,13 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         maxImageWidth: CGFloat
     ) -> NSAttributedString {
         let attachment = NSTextAttachment()
-        let preview = NoteImageStore.shared.previewImage(for: image.id)
+        let sourcePreview = NoteImageStore.shared.previewImage(for: image.id)
             ?? UIImage(systemName: "photo")
             ?? UIImage()
+        // Decode the preview while constructing the attachment. Otherwise the
+        // first scroll through each large image performs image decoding on the
+        // main rendering path and makes multi-image notes stutter.
+        let preview = sourcePreview.preparingForDisplay() ?? sourcePreview
         attachment.image = preview
 
         let sourceSize = preview.size
@@ -676,6 +682,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
+            documentID: documentID,
             isEditing: $isEditing,
             images: images,
             onDocumentChange: onDocumentChange,
@@ -737,6 +744,33 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         context.coordinator.headerController?.rootView = OldOSDestinationHeader(metadata: metadata)
         context.coordinator.onDocumentChange = onDocumentChange
         context.coordinator.onCommit = onCommit
+
+        // A SwiftUI transition can retain the same UITextView while the model
+        // has already switched from note A to B. Never let the old active edit
+        // session suppress that document replacement, or A's attachment layer
+        // remains on screen and flickers through B.
+        if context.coordinator.documentID != documentID {
+            uiView.resignFirstResponder()
+            context.coordinator.isUserEditingSession = false
+            context.coordinator.isApplyingModelDocument = true
+            context.coordinator.imageMetadata = Dictionary(
+                uniqueKeysWithValues: images.map { ($0.id, $0) }
+            )
+            uiView.attributedText = Self.styledText(
+                text,
+                images: images,
+                maxImageWidth: Self.maximumImageWidth(in: uiView)
+            )
+            uiView.typingAttributes = Self.noteAttributes
+            uiView.selectedRange = NSRange(location: 0, length: 0)
+            uiView.setContentOffset(.zero, animated: false)
+            context.coordinator.isApplyingModelDocument = false
+            context.coordinator.documentID = documentID
+            context.coordinator.lastInsertedPendingID = nil
+            context.coordinator.recordAppliedDocument(text: text, images: images)
+            isEditing = false
+            return
+        }
         for image in images {
             context.coordinator.imageMetadata[image.id] = image
         }
@@ -780,6 +814,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         @Binding private var isEditing: Bool
+        var documentID: UUID
         var imageMetadata: [UUID: NoteImage]
         var onDocumentChange: (String, [NoteImage]) -> Void
         var onCommit: () -> Void
@@ -794,11 +829,13 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         private var baseContentInset = UIEdgeInsets.zero
 
         init(
+            documentID: UUID,
             isEditing: Binding<Bool>,
             images: [NoteImage],
             onDocumentChange: @escaping (String, [NoteImage]) -> Void,
             onCommit: @escaping () -> Void
         ) {
+            self.documentID = documentID
             _isEditing = isEditing
             imageMetadata = Dictionary(uniqueKeysWithValues: images.map { ($0.id, $0) })
             self.onDocumentChange = onDocumentChange
