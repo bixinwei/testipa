@@ -118,7 +118,9 @@ final class DuplicateScanner: ObservableObject {
     private let ignoredDefaultsKey = "DiskDeduper.ignoredPaths"
     private let bookmarkDefaultsKey = "DiskDeduper.rootBookmark"
     private let scanLimitDefaultsKey = "DiskDeduper.scanLimit"
+    private let deletionPriorityDefaultsKey = "DiskDeduper.deletionPriorityDirectories"
     private var ignoredPaths: Set<String> = []
+    private var deletionPriorityDirectories: Set<String> = []
     private var accessedRootURL: URL?
     private let cacheStore = ScanCacheStore()
     private var currentCache: [String: CachedDigest] = [:]
@@ -140,6 +142,7 @@ final class DuplicateScanner: ObservableObject {
         stopAccessingRoot()
         rootURL = url
         beginAccessingRoot(url)
+        loadDeletionPriorityDirectories(for: url)
         do {
             let bookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
             UserDefaults.standard.set(bookmark, forKey: bookmarkDefaultsKey)
@@ -211,6 +214,12 @@ final class DuplicateScanner: ObservableObject {
         // files from the in-memory result and cache; the next explicit scan
         // will reconcile metadata changes across the whole selected folder.
         if !deletedKeys.isEmpty {
+            deletionPriorityDirectories.formUnion(
+                files
+                    .filter { deletedKeys.contains($0.cacheKey) }
+                    .map { directoryKey(for: $0) }
+            )
+            if let rootURL { saveDeletionPriorityDirectories(for: rootURL) }
             groups = groups.compactMap { group in
                 let remaining = group.files.filter { !deletedKeys.contains($0.cacheKey) }
                 guard remaining.count > 1 else { return nil }
@@ -233,7 +242,18 @@ final class DuplicateScanner: ObservableObject {
     func duplicateFiles(in groupIDs: Set<String>) -> [DiskFile] {
         groups
             .filter { groupIDs.contains($0.id) }
-            .flatMap { Array($0.files.dropFirst()) }
+            .flatMap { preferredDuplicatesToDelete(in: $0) }
+    }
+
+    func preferredDuplicatesToDelete(in group: DuplicateGroup) -> [DiskFile] {
+        guard group.files.count > 1 else { return [] }
+        let preferredKeepers = group.files.filter {
+            !deletionPriorityDirectories.contains(directoryKey(for: $0))
+        }
+        let keeper = (preferredKeepers.isEmpty ? group.files : preferredKeepers)
+            .min { $0.cacheKey.localizedStandardCompare($1.cacheKey) == .orderedAscending }
+        guard let keeper else { return [] }
+        return group.files.filter { $0.id != keeper.id }
     }
 
     private func restoreRoot() {
@@ -242,6 +262,7 @@ final class DuplicateScanner: ObservableObject {
         guard let url = try? URL(resolvingBookmarkData: data, options: .withoutUI, relativeTo: nil, bookmarkDataIsStale: &stale) else { return }
         rootURL = url
         beginAccessingRoot(url)
+        loadDeletionPriorityDirectories(for: url)
         if stale { setRoot(url) }
     }
 
@@ -254,6 +275,28 @@ final class DuplicateScanner: ObservableObject {
     private func stopAccessingRoot() {
         accessedRootURL?.stopAccessingSecurityScopedResource()
         accessedRootURL = nil
+    }
+
+    private func directoryKey(for file: DiskFile) -> String {
+        let directory = (file.cacheKey as NSString).deletingLastPathComponent
+        return directory == "." ? "" : directory
+    }
+
+    private func loadDeletionPriorityDirectories(for root: URL) {
+        let allDirectories = UserDefaults.standard.dictionary(forKey: deletionPriorityDefaultsKey) as? [String: [String]] ?? [:]
+        deletionPriorityDirectories = Set(allDirectories[rootIdentifier(for: root)] ?? [])
+    }
+
+    private func saveDeletionPriorityDirectories(for root: URL) {
+        var allDirectories = UserDefaults.standard.dictionary(forKey: deletionPriorityDefaultsKey) as? [String: [String]] ?? [:]
+        allDirectories[rootIdentifier(for: root)] = Array(deletionPriorityDirectories).sorted()
+        UserDefaults.standard.set(allDirectories, forKey: deletionPriorityDefaultsKey)
+    }
+
+    private func rootIdentifier(for root: URL) -> String {
+        SHA256.hash(data: Data(root.absoluteString.utf8))
+            .map { String(format: "%02hhx", $0) }
+            .joined()
     }
 
     nonisolated private static func findDuplicates(

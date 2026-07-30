@@ -46,7 +46,11 @@ struct ContentView: View {
             }
             .navigationTitle("磁盘去重")
             .navigationDestination(for: DuplicateGroup.self) { group in
-                DuplicateGroupView(group: group, selectedPreview: $selectedPreview)
+                DuplicateGroupView(
+                    group: group,
+                    selectedPreview: $selectedPreview,
+                    initiallySelected: Set(scanner.preferredDuplicatesToDelete(in: group).map(\.id))
+                )
             }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarLeading) {
@@ -120,7 +124,7 @@ struct ContentView: View {
                 selectedGroupIDs.removeAll()
             }
         } message: {
-            Text("每个分组会保留第一份文件，所选的其余副本将被永久删除。")
+            Text("会优先保留未被标记为重复删除目录中的副本；其余副本将被永久删除。")
         }
         .sheet(item: $selectedPreview) { file in FilePreviewSheet(file: file) }
     }
@@ -162,16 +166,16 @@ private struct DuplicateGroupView: View {
     @State private var selected: Set<String>
     @State private var showingDeleteConfirmation = false
 
-    init(group: DuplicateGroup, selectedPreview: Binding<DiskFile?>) {
+    init(group: DuplicateGroup, selectedPreview: Binding<DiskFile?>, initiallySelected: Set<String>) {
         self.group = group
         _selectedPreview = selectedPreview
-        _selected = State(initialValue: Set(group.files.dropFirst().map(\.id)))
+        _selected = State(initialValue: initiallySelected)
     }
 
     var body: some View {
         List {
             Section("相同文件") {
-                Text("已按文件大小和 MD5 双重确认。默认保留第一份，勾选其余文件后可删除或忽略。")
+                Text("已按文件大小和 MD5 双重确认。会优先勾选曾删除过重复副本的目录中的文件，可继续手动调整。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section {
