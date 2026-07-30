@@ -1483,35 +1483,6 @@ final class AppViewModel: ObservableObject {
         server.updateSharedDocument(text: text, images: currentNote.images)
     }
 
-    /// Supplies a deterministic, tall inline image for the GitHub simulator
-    /// reproduction run. It is reachable only through a launch environment
-    /// variable and never runs during a normal application launch.
-    func prepareAttachmentCaretReproduction() {
-        let imageID = UUID()
-        let size = CGSize(width: 720, height: 1_280)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        let preview = renderer.image { context in
-            UIColor(red: 0.32, green: 0.42, blue: 0.56, alpha: 1).setFill()
-            context.cgContext.fill(CGRect(origin: .zero, size: size))
-            UIColor.white.setFill()
-            context.cgContext.fill(CGRect(x: 36, y: 36, width: size.width - 72, height: size.height - 72))
-        }
-        guard let data = preview.jpegData(compressionQuality: 0.9) else { return }
-        let text = "Simulator attachment\n\n"
-        let image = NoteImage(
-            id: imageID,
-            location: ("Simulator attachment\n" as NSString).length,
-            filename: "attachment-caret-reproduction.jpg",
-            mimeType: "image/jpeg"
-        )
-        try? NoteImageStore.shared.save(originalData: data, previewData: data, withID: imageID)
-        let note = Note(text: text, images: [image])
-        notes = [note]
-        selectedNoteID = note.id
-        self.text = text
-        showingList = false
-    }
-
     func select(_ note: Note) {
         persistText()
         selectedNoteID = note.id
@@ -2055,10 +2026,6 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
         if CommandLine.arguments.contains("-HelloIPA.ShowShare") {
             viewModel.showingShareSheet = true
-        }
-        if CommandLine.arguments.contains("-HelloIPA.AttachmentCaretReproduction")
-            || ProcessInfo.processInfo.environment["HELLOIPA_ATTACHMENT_CARET_REPRODUCTION"] == "1" {
-            viewModel.prepareAttachmentCaretReproduction()
         }
         window.rootViewController = ImmersiveHostingController(rootView: ContentView(viewModel: viewModel))
         self.window = window
