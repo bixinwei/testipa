@@ -6,6 +6,8 @@ struct ContentView: View {
     @EnvironmentObject private var scanner: DuplicateScanner
     @State private var showingImporter = false
     @State private var selectedPreview: DiskFile?
+    @State private var selectedGroupIDs: Set<String> = []
+    @State private var showingBulkDeleteConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -14,10 +16,10 @@ struct ContentView: View {
                     EmptyState(
                         title: "尚未发现重复文件",
                         symbol: "externaldrive.badge.magnifyingglass",
-                        message: scanner.rootURL == nil ? "选择移动硬盘中的文件夹后开始扫描。" : "点击扫描，按 \(scanner.mode.rawValue) 查找重复文件。"
+                        message: scanner.rootURL == nil ? "选择移动硬盘中的文件夹后开始扫描。" : "点击扫描，按文件大小和 MD5 确认重复文件。"
                     )
                 } else {
-                    List {
+                    List(selection: $selectedGroupIDs) {
                         if scanner.isScanning {
                             Section {
                                 HStack { ProgressView(); Text("正在扫描文件…") }
@@ -36,6 +38,7 @@ struct ContentView: View {
                             }
                             ForEach(scanner.groups) { group in
                                 NavigationLink(value: group) { GroupRow(group: group) }
+                                    .tag(group.id)
                             }
                         }
                     }
@@ -46,31 +49,44 @@ struct ContentView: View {
                 DuplicateGroupView(group: group, selectedPreview: $selectedPreview)
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItemGroup(placement: .topBarLeading) {
                     Menu {
-                        Picker("匹配方式", selection: $scanner.mode) {
-                            ForEach(MatchingMode.allCases) { Text($0.rawValue).tag($0) }
-                        }
                         Picker("本次新文件校验", selection: $scanner.scanLimit) {
                             ForEach(ScanLimit.allCases) { Text($0.rawValue).tag($0) }
                         }
                     } label: { Image(systemName: "slider.horizontal.3") }
+                    if !scanner.groups.isEmpty { EditButton() }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if !scanner.groups.isEmpty {
+                        Button(selectedGroupIDs.count == scanner.groups.count ? "取消全选" : "全选") {
+                            if selectedGroupIDs.count == scanner.groups.count {
+                                selectedGroupIDs.removeAll()
+                            } else {
+                                selectedGroupIDs = Set(scanner.groups.map(\.id))
+                            }
+                        }
+                    }
                     Button { showingImporter = true } label: { Image(systemName: "folder.badge.plus") }
                 }
                 ToolbarItem(placement: .bottomBar) {
-                    Button { scanner.scan() } label: {
-                        Label(scanner.isScanning ? "扫描中" : "开始扫描", systemImage: "magnifyingglass")
+                    if selectedDuplicateFiles.isEmpty {
+                        Button { scanner.scan() } label: {
+                            Label(scanner.isScanning ? "扫描中" : "开始扫描", systemImage: "magnifyingglass")
+                        }
+                        .disabled(scanner.isScanning || scanner.rootURL == nil)
+                    } else {
+                        Button(role: .destructive) { showingBulkDeleteConfirmation = true } label: {
+                            Label("删除选中 \(selectedDuplicateFiles.count) 个副本", systemImage: "trash")
+                        }
                     }
-                    .disabled(scanner.isScanning || scanner.rootURL == nil)
                 }
             }
             .safeAreaInset(edge: .bottom) {
                 if let root = scanner.rootURL {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("当前范围：\(root.lastPathComponent)").font(.footnote.weight(.semibold))
-                        Text(scanner.mode.explanatoryText).font(.caption).foregroundStyle(.secondary)
+                        Text(scanner.matchingDescription).font(.caption).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal).padding(.vertical, 8)
@@ -94,7 +110,23 @@ struct ContentView: View {
                 dismissButton: .default(Text("好"))
             )
         }
+        .confirmationDialog(
+            "删除选中分组中的 \(selectedDuplicateFiles.count) 个重复副本？",
+            isPresented: $showingBulkDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("删除", role: .destructive) {
+                scanner.delete(selectedDuplicateFiles)
+                selectedGroupIDs.removeAll()
+            }
+        } message: {
+            Text("每个分组会保留第一份文件，所选的其余副本将被永久删除。")
+        }
         .sheet(item: $selectedPreview) { file in FilePreviewSheet(file: file) }
+    }
+
+    private var selectedDuplicateFiles: [DiskFile] {
+        scanner.duplicateFiles(in: selectedGroupIDs)
     }
 }
 
@@ -139,7 +171,7 @@ private struct DuplicateGroupView: View {
     var body: some View {
         List {
             Section("相同文件") {
-                Text("已按 \(scanner.mode.rawValue) 匹配。默认保留第一份，勾选其余文件后可删除或忽略。")
+                Text("已按文件大小和 MD5 双重确认。默认保留第一份，勾选其余文件后可删除或忽略。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section {

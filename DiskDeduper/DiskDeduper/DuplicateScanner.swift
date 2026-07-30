@@ -4,19 +4,6 @@ import Foundation
 import UniformTypeIdentifiers
 import UIKit
 
-enum MatchingMode: String, CaseIterable, Identifiable {
-    case fileSize = "文件大小"
-    case md5 = "MD5 内容"
-
-    var id: Self { self }
-    var explanatoryText: String {
-        switch self {
-        case .fileSize: return "快速找出大小相同的文件；内容不一定相同。"
-        case .md5: return "先按大小筛选，仅对同大小候选计算 MD5；结果准确。"
-        }
-    }
-}
-
 enum ScanLimit: String, CaseIterable, Identifiable {
     case oneThousand = "1,000 个"
     case fiveThousand = "5,000 个"
@@ -117,7 +104,6 @@ struct DuplicateGroup: Identifiable, Hashable, Sendable {
 final class DuplicateScanner: ObservableObject {
     @Published var rootURL: URL?
     @Published var groups: [DuplicateGroup] = []
-    @Published var mode: MatchingMode = .md5
     @Published var scanLimit: ScanLimit = .fiveThousand {
         didSet { UserDefaults.standard.set(scanLimit.rawValue, forKey: scanLimitDefaultsKey) }
     }
@@ -148,6 +134,7 @@ final class DuplicateScanner: ObservableObject {
 
     var totalDuplicates: Int { groups.reduce(0) { $0 + max(0, $1.files.count - 1) } }
     var recoverableSpace: Int64 { groups.reduce(0) { $0 + $1.spaceToRecover } }
+    let matchingDescription = "按文件大小粗筛，再以 MD5 内容确认重复。"
 
     func setRoot(_ url: URL) {
         stopAccessingRoot()
@@ -172,7 +159,6 @@ final class DuplicateScanner: ObservableObject {
         reusedHashes = 0
         newlyHashed = 0
         pendingHashes = 0
-        let mode = mode
         let ignored = ignoredPaths
         let cachedDigests = cacheStore.load(for: rootURL)
         currentCache = cachedDigests
@@ -181,7 +167,6 @@ final class DuplicateScanner: ObservableObject {
             let result = await Task.detached(priority: .userInitiated) {
                 Self.findDuplicates(
                     at: rootURL,
-                    mode: mode,
                     ignoredPaths: ignored,
                     cachedDigests: cachedDigests,
                     maximumNewHashes: limit
@@ -245,6 +230,12 @@ final class DuplicateScanner: ObservableObject {
         }
     }
 
+    func duplicateFiles(in groupIDs: Set<String>) -> [DiskFile] {
+        groups
+            .filter { groupIDs.contains($0.id) }
+            .flatMap { Array($0.files.dropFirst()) }
+    }
+
     private func restoreRoot() {
         guard let data = UserDefaults.standard.data(forKey: bookmarkDefaultsKey) else { return }
         var stale = false
@@ -267,7 +258,6 @@ final class DuplicateScanner: ObservableObject {
 
     nonisolated private static func findDuplicates(
         at root: URL,
-        mode: MatchingMode,
         ignoredPaths: Set<String>,
         cachedDigests: [String: CachedDigest],
         maximumNewHashes: Int
@@ -306,19 +296,6 @@ final class DuplicateScanner: ObservableObject {
         }
 
         let sameSize = filesBySize.values.filter { $0.count > 1 }
-        if mode == .fileSize {
-            return ScanResult(
-                groups: sameSize.map { DuplicateGroup(key: "size-\($0[0].size)-\($0[0].path)", files: $0) }
-                    .sorted { $0.spaceToRecover > $1.spaceToRecover },
-                scannedFiles: scanned,
-                reusedHashes: 0,
-                newlyHashed: 0,
-                pendingHashes: 0,
-                cache: cachedDigests,
-                errorMessage: nil
-            )
-        }
-
         var byDigest: [String: [DiskFile]] = [:]
         var nextCache: [String: CachedDigest] = [:]
         var needsHash: [DiskFile] = []
