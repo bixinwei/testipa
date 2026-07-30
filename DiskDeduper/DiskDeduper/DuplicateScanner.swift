@@ -80,15 +80,15 @@ final class DuplicateScanner: ObservableObject {
         scannedFiles = 0
         let mode = mode
         let ignored = ignoredPaths
-        Task.detached(priority: .userInitiated) { [weak self] in
-            let result = Self.findDuplicates(at: rootURL, mode: mode, ignoredPaths: ignored)
-            await MainActor.run {
-                guard let self else { return }
-                self.groups = result.groups
-                self.scannedFiles = result.scannedFiles
-                self.isScanning = false
-                self.errorMessage = result.errorMessage
-            }
+        Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                Self.findDuplicates(at: rootURL, mode: mode, ignoredPaths: ignored)
+            }.value
+            guard let self else { return }
+            self.groups = result.groups
+            self.scannedFiles = result.scannedFiles
+            self.isScanning = false
+            self.errorMessage = result.errorMessage
         }
     }
 

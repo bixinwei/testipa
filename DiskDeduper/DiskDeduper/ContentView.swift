@@ -11,10 +11,10 @@ struct ContentView: View {
         NavigationStack {
             Group {
                 if scanner.groups.isEmpty && !scanner.isScanning {
-                    ContentUnavailableView(
-                        "尚未发现重复文件",
-                        systemImage: "externaldrive.badge.magnifyingglass",
-                        description: Text(scanner.rootURL == nil ? "选择移动硬盘中的文件夹后开始扫描。" : "点击扫描，按 \(scanner.mode.rawValue) 查找重复文件。")
+                    EmptyState(
+                        title: "尚未发现重复文件",
+                        symbol: "externaldrive.badge.magnifyingglass",
+                        message: scanner.rootURL == nil ? "选择移动硬盘中的文件夹后开始扫描。" : "点击扫描，按 \(scanner.mode.rawValue) 查找重复文件。"
                     )
                 } else {
                     List {
@@ -159,7 +159,7 @@ private struct FileRow: View {
         HStack(alignment: .top, spacing: 12) {
             Button(action: toggle) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3).foregroundStyle(isSelected ? .tint : .secondary)
+                    .font(.title3).foregroundColor(isSelected ? .accentColor : .secondary)
             }.buttonStyle(.plain)
             PreviewThumbnail(file: file).onTapGesture(perform: onPreview)
             VStack(alignment: .leading, spacing: 4) {
@@ -191,10 +191,25 @@ private struct FilePreviewSheet: View {
             Group {
                 if file.type == .image, let image = UIImage(contentsOfFile: file.path) { Image(uiImage: image).resizable().scaledToFit().padding() }
                 else if file.type == .video { VideoPlayer(player: AVPlayer(url: file.url)) }
-                else { ContentUnavailableView("无法预览", systemImage: "doc", description: Text(file.filename)) }
+                else { EmptyState(title: "无法预览", symbol: "doc", message: file.filename) }
             }
             .navigationTitle(file.filename).navigationBarTitleDisplayMode(.inline)
         }
+    }
+}
+
+private struct EmptyState: View {
+    let title: String
+    let symbol: String
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: symbol).font(.system(size: 42)).foregroundStyle(.secondary)
+            Text(title).font(.headline)
+            Text(message).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }
+        .padding(32)
     }
 }
 
