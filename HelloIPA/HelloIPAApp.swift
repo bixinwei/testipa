@@ -708,13 +708,21 @@ final class LocalTextShareServer: ObservableObject {
                         additionalHeaders: ["Cache-Control": "private, max-age=3600"]
                     )
                 } else if request.requestLine.hasPrefix("POST "), request.path == "/sync" {
-                    self.applyWebSync(request.body)
-                    let body = "{\"ok\":true}"
-                    response = self.httpDataResponse(
-                        statusLine: "HTTP/1.1 200 OK\r\n",
-                        contentType: "application/json; charset=utf-8",
-                        body: Data(body.utf8)
-                    )
+                    if let errorMessage = self.applyWebSync(request.body) {
+                        let body = "{\"ok\":false,\"error\":\"\(errorMessage)\"}"
+                        response = self.httpDataResponse(
+                            statusLine: "HTTP/1.1 422 Unprocessable Content\r\n",
+                            contentType: "application/json; charset=utf-8",
+                            body: Data(body.utf8)
+                        )
+                    } else {
+                        let body = "{\"ok\":true}"
+                        response = self.httpDataResponse(
+                            statusLine: "HTTP/1.1 200 OK\r\n",
+                            contentType: "application/json; charset=utf-8",
+                            body: Data(body.utf8)
+                        )
+                    }
                 } else {
                     let body = "<html><body><h1>404</h1></body></html>"
                     response = self.httpDataResponse(
@@ -904,25 +912,40 @@ final class LocalTextShareServer: ObservableObject {
             const status = document.getElementById('status');
 
             function serializeEditor() {
-              const clone = editor.cloneNode(true);
               const markers = new Map();
+              let markerIndex = 0;
+              let linearText = '';
 
-              clone.querySelectorAll('.image-block[data-image-id]').forEach((block, index) => {
-                const marker = `\\uE000HELLOIPA_IMAGE_${index}_\\uE001`;
-                markers.set(marker, block.dataset.imageId);
-                block.replaceWith(document.createTextNode(marker));
-              });
+              function append(value) {
+                linearText += value;
+              }
 
-              clone.removeAttribute('id');
-              clone.contentEditable = 'false';
-              clone.style.position = 'fixed';
-              clone.style.left = '-10000px';
-              clone.style.top = '0';
-              clone.style.width = editor.offsetWidth + 'px';
-              clone.style.visibility = 'hidden';
-              document.body.appendChild(clone);
-              const linearText = clone.innerText.replace(/\\r\\n/g, '\\n');
-              clone.remove();
+              function walk(node) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                  append(node.nodeValue || '');
+                  return;
+                }
+                if (node.nodeType !== Node.ELEMENT_NODE) {
+                  return;
+                }
+
+                const element = node;
+                if (element.classList.contains('image-block') && element.dataset.imageId) {
+                  if (linearText.length > 0 && !linearText.endsWith('\\n')) {
+                    append('\\n');
+                  }
+                  const marker = `\\uE000HELLOIPA_IMAGE_${markerIndex}_\\uE001`;
+                  markerIndex += 1;
+                  markers.set(marker, element.dataset.imageId);
+                  append(marker + '\\n');
+                  return;
+                }
+
+                element.childNodes.forEach(walk);
+              }
+
+              editor.childNodes.forEach(walk);
+              linearText = linearText.replace(/\\r\\n?/g, '\\n');
               const markerPattern = /\\uE000HELLOIPA_IMAGE_(\\d+)_\\uE001/g;
               const images = [];
               let text = '';
@@ -1038,11 +1061,12 @@ final class LocalTextShareServer: ObservableObject {
         return html
     }
 
-    private func applyWebSync(_ body: String) {
+    /// Returns an error instead of applying an empty or malformed web payload.
+    /// A failed browser serialization must never erase the selected note.
+    private func applyWebSync(_ body: String) -> String? {
         guard let data = body.data(using: .utf8),
               let payload = try? JSONDecoder().decode(WebSyncPayload.self, from: data) else {
-            updateSharedText(body)
-            return
+            return "网页同步数据无效，已保留手机上的备忘录。"
         }
 
         let maximumLocation = (payload.text as NSString).length
@@ -1056,7 +1080,19 @@ final class LocalTextShareServer: ObservableObject {
             image.location = min(max(0, position.location), maximumLocation)
             return image
         }
+
+        let currentImageIDs = Set(currentImages.map { $0.id })
+        let receivedImageIDs = Set(updatedImages.map { $0.id })
+        guard currentImageIDs == receivedImageIDs else {
+            return "网页图片数据不完整，已取消同步以保护手机上的备忘录。"
+        }
+
+        let hasText = !payload.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard hasText || !updatedImages.isEmpty || (currentText.isEmpty && currentImages.isEmpty) else {
+            return "网页正文为空，已取消同步以保护手机上的备忘录。"
+        }
         updateSharedDocument(text: payload.text, images: updatedImages)
+        return nil
     }
 
     private struct WebSyncPayload: Decodable {
