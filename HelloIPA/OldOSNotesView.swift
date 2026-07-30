@@ -531,6 +531,12 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         .font: noteFont,
         .foregroundColor: UIColor.black
     ]
+    // A bare attachment is represented by one U+FFFC character. Tapping the
+    // empty part of its line can leave UITextView's caret exactly on that object
+    // replacement boundary, where TextKit has no editable glyph to anchor to.
+    // Keep an invisible ordinary-text character immediately after every image so
+    // the insertion point always belongs to a normal text run.
+    private static let attachmentCaretAnchor = "\u{200B}"
 
     private static var isAttachmentCaretReproductionEnabled: Bool {
         CommandLine.arguments.contains("-HelloIPA.AttachmentCaretReproduction")
@@ -586,6 +592,12 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             value: image.id.uuidString,
             range: NSRange(location: 0, length: result.length)
         )
+        result.append(
+            NSAttributedString(
+                string: attachmentCaretAnchor,
+                attributes: noteAttributes
+            )
+        )
         return result
     }
 
@@ -610,6 +622,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
 
             let segment = (attributedText.string as NSString).substring(with: range)
                 .replacingOccurrences(of: "\u{FFFC}", with: "")
+                .replacingOccurrences(of: attachmentCaretAnchor, with: "")
             plainText += segment
             plainUTF16Length += (segment as NSString).length
         }
