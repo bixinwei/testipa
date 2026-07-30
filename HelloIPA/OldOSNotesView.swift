@@ -666,7 +666,6 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         )
         view.typingAttributes = Self.noteAttributes
         context.coordinator.recordAppliedDocument(text: text, images: images)
-#if DEBUG
         if CommandLine.arguments.contains("-HelloIPA.AttachmentCaretReproduction")
             || ProcessInfo.processInfo.environment["HELLOIPA_ATTACHMENT_CARET_REPRODUCTION"] == "1" {
             DispatchQueue.main.async {
@@ -680,7 +679,6 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
                 view.selectedRange = NSRange(location: attachmentLocation + 1, length: 0)
             }
         }
-#endif
         return view
     }
 

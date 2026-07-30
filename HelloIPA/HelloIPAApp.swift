@@ -1483,10 +1483,9 @@ final class AppViewModel: ObservableObject {
         server.updateSharedDocument(text: text, images: currentNote.images)
     }
 
-#if DEBUG
     /// Supplies a deterministic, tall inline image for the GitHub simulator
-    /// reproduction run. It is reachable only through a DEBUG launch argument
-    /// and never participates in the release application.
+    /// reproduction run. It is reachable only through a launch environment
+    /// variable and never runs during a normal application launch.
     func prepareAttachmentCaretReproduction() {
         let imageID = UUID()
         let size = CGSize(width: 720, height: 1_280)
@@ -1512,7 +1511,6 @@ final class AppViewModel: ObservableObject {
         self.text = text
         showingList = false
     }
-#endif
 
     func select(_ note: Note) {
         persistText()
@@ -2050,7 +2048,6 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else { return }
 
         let window = UIWindow(windowScene: windowScene)
-#if DEBUG
         // Used only by the simulator smoke-test workflow to capture each
         // screen without relying on fragile coordinate taps.
         if CommandLine.arguments.contains("-HelloIPA.ShowDetail") {
@@ -2063,7 +2060,6 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             || ProcessInfo.processInfo.environment["HELLOIPA_ATTACHMENT_CARET_REPRODUCTION"] == "1" {
             viewModel.prepareAttachmentCaretReproduction()
         }
-#endif
         window.rootViewController = ImmersiveHostingController(rootView: ContentView(viewModel: viewModel))
         self.window = window
         window.makeKeyAndVisible()
