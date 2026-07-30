@@ -428,9 +428,9 @@ struct OldOSNotesDestinationView: View {
                                     viewModel.startSharing()
                                 }
                             }) {
-                                Image(systemName: viewModel.server.isSharingEnabled ? "wifi.slash" : "wifi")
-                                    .font(.system(size: 24, weight: .regular))
-                                    .foregroundColor(Color(red: 113/255, green: 93/255, blue: 81/255))
+                                Image("NotesWiFiShare")
+                                    .resizable()
+                                    .scaledToFit()
                                     .frame(width: 32, height: 32)
                             }
                             Spacer()
