@@ -828,7 +828,10 @@ final class LocalTextShareServer: ObservableObject {
             .document-editor {
               width: 100%;
               min-height: 260px;
-              padding: 40px 28px 30px;
+              /* The source paper's ruled margin occupies 48 px of its 640 px
+                 bitmap.  Add the same proportional margin before the 28 px
+                 Notes text inset, so web text begins to the right of both rules. */
+              padding: 40px 28px 30px calc(7.5% + 28px);
               border-radius: 0;
               border: 0;
               background-color: #fff8c4;
@@ -920,6 +923,12 @@ final class LocalTextShareServer: ObservableObject {
                 linearText += value;
               }
 
+              function appendBlockBreak() {
+                if (linearText.length > 0 && !linearText.endsWith('\\n')) {
+                  append('\\n');
+                }
+              }
+
               function walk(node) {
                 if (node.nodeType === Node.TEXT_NODE) {
                   append(node.nodeValue || '');
@@ -930,10 +939,12 @@ final class LocalTextShareServer: ObservableObject {
                 }
 
                 const element = node;
+                if (element.tagName === 'BR') {
+                  append('\\n');
+                  return;
+                }
                 if (element.classList.contains('image-block') && element.dataset.imageId) {
-                  if (linearText.length > 0 && !linearText.endsWith('\\n')) {
-                    append('\\n');
-                  }
+                  appendBlockBreak();
                   const marker = `\\uE000HELLOIPA_IMAGE_${markerIndex}_\\uE001`;
                   markerIndex += 1;
                   markers.set(marker, element.dataset.imageId);
@@ -941,7 +952,14 @@ final class LocalTextShareServer: ObservableObject {
                   return;
                 }
 
+                const isTextBlock = ['DIV', 'P', 'LI'].includes(element.tagName);
+                if (isTextBlock) {
+                  appendBlockBreak();
+                }
                 element.childNodes.forEach(walk);
+                if (isTextBlock) {
+                  appendBlockBreak();
+                }
               }
 
               editor.childNodes.forEach(walk);
