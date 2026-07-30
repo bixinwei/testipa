@@ -498,11 +498,6 @@ struct OldOSNotesDestinationView: View {
                 }
                 .overlay(
                     VStack {
-                        Image("edgeTopMarginThin")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: geometry.size.width + 4)
-                            .clipped()
                         Spacer()
                         Image("gradBottomMarginThin")
                             .resizable()
@@ -547,6 +542,7 @@ struct OldOSNotesDestinationView: View {
                             Spacer()
                         }
                         .frame(height: 48)
+                        .padding(.top, 24)
                         .padding(.bottom, 30)
                     }
                 )
