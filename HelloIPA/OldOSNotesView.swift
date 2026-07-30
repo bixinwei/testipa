@@ -61,17 +61,11 @@ struct PendingNoteImage: Identifiable, Equatable {
     var id: UUID { image.id }
 }
 
-private final class OldOSInlineImageAttachment: NSTextAttachment {
-    let imageID: UUID
-
-    init(imageID: UUID) {
-        self.imageID = imageID
-        super.init(data: nil, ofType: nil)
-    }
-
-    required init?(coder: NSCoder) {
-        return nil
-    }
+private extension NSAttributedString.Key {
+    // Keep application metadata alongside a stock NSTextAttachment. TextKit is
+    // free to copy and archive the attachment while laying out a caret, so the
+    // identifier must not depend on an incomplete attachment subclass.
+    static let helloIPANoteImageID = NSAttributedString.Key("HelloIPA.NoteImageID")
 }
 
 private enum OldOSNotesActionMenu: Int, Identifiable {
@@ -554,7 +548,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         for image: NoteImage,
         maxImageWidth: CGFloat
     ) -> NSAttributedString {
-        let attachment = OldOSInlineImageAttachment(imageID: image.id)
+        let attachment = NSTextAttachment()
         let preview = NoteImageStore.shared.previewImage(for: image.id)
             ?? UIImage(systemName: "photo")
             ?? UIImage()
@@ -570,7 +564,13 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
             width: width,
             height: height
         )
-        return NSAttributedString(attachment: attachment)
+        let result = NSMutableAttributedString(attachment: attachment)
+        result.addAttribute(
+            .helloIPANoteImageID,
+            value: image.id.uuidString,
+            range: NSRange(location: 0, length: result.length)
+        )
+        return result
     }
 
     private static func document(
@@ -583,8 +583,10 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         let fullRange = NSRange(location: 0, length: attributedText.length)
 
         attributedText.enumerateAttributes(in: fullRange, options: []) { attributes, range, _ in
-            if let attachment = attributes[.attachment] as? OldOSInlineImageAttachment,
-               var image = metadata[attachment.imageID] {
+            if attributes[.attachment] is NSTextAttachment,
+               let imageID = attributes[.helloIPANoteImageID] as? String,
+               let id = UUID(uuidString: imageID),
+               var image = metadata[id] {
                 image.location = plainUTF16Length
                 extractedImages.append(image)
                 return
