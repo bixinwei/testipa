@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Photos
 import PhotosUI
 import UniformTypeIdentifiers
 
@@ -226,9 +227,9 @@ struct OldOSNotesRootView: View {
                         activePicker = .photoLibrary
                     }
                 }
-                Button("剪贴板") {
+                Button("最近照片") {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        insertImageFromClipboard()
+                        insertMostRecentPhoto()
                     }
                 }
                 Button("文件") {
@@ -260,13 +261,55 @@ struct OldOSNotesRootView: View {
         }
     }
 
-    private func insertImageFromClipboard() {
-        guard let image = UIPasteboard.general.image,
-              let data = image.pngData() else {
-            imageError = OldOSNotesImageError(message: "剪贴板中没有可用的图片。")
+    private func insertMostRecentPhoto() {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        switch status {
+        case .authorized, .limited:
+            loadMostRecentPhoto()
+        case .notDetermined:
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { newStatus in
+                DispatchQueue.main.async {
+                    guard newStatus == .authorized || newStatus == .limited else {
+                        imageError = OldOSNotesImageError(message: "需要允许访问照片，才能插入最近照片。")
+                        return
+                    }
+                    loadMostRecentPhoto()
+                }
+            }
+        default:
+            imageError = OldOSNotesImageError(message: "请在系统设置中允许访问照片，才能插入最近照片。")
+        }
+    }
+
+    private func loadMostRecentPhoto() {
+        let fetchOptions = PHFetchOptions()
+        fetchOptions.fetchLimit = 1
+        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        guard let asset = PHAsset.fetchAssets(with: .image, options: fetchOptions).firstObject else {
+            imageError = OldOSNotesImageError(message: "照片图库中没有可插入的图片。")
             return
         }
-        receivePickedImage(data, "clipboard.png", "image/png")
+
+        let options = PHImageRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .highQualityFormat
+        options.version = .current
+        PHImageManager.default().requestImageDataAndOrientation(
+            for: asset,
+            options: options
+        ) { data, dataUTI, _, _ in
+            DispatchQueue.main.async {
+                guard let data else {
+                    imageError = OldOSNotesImageError(message: "无法读取最近照片，请稍后重试。")
+                    return
+                }
+                let filename = PHAssetResource.assetResources(for: asset).first?.originalFilename
+                    ?? "recent-photo.jpg"
+                let mimeType = dataUTI.flatMap { UTType($0)?.preferredMIMEType }
+                    ?? "image/jpeg"
+                receivePickedImage(data, filename, mimeType)
+            }
+        }
     }
 
     private func receivePickedImage(_ data: Data, _ filename: String, _ mimeType: String) {
