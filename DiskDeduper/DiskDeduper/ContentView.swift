@@ -25,6 +25,12 @@ struct ContentView: View {
                         }
                         if !scanner.groups.isEmpty {
                             Section("扫描结果") {
+                                LabeledContent("已枚举") { Text("\(scanner.scannedFiles) 个") }
+                                LabeledContent("复用缓存") { Text("\(scanner.reusedHashes) 个") }
+                                LabeledContent("本次 MD5") { Text("\(scanner.newlyHashed) 个") }
+                                if scanner.pendingHashes > 0 {
+                                    LabeledContent("待下次校验") { Text("\(scanner.pendingHashes) 个") }
+                                }
                                 LabeledContent("重复文件") { Text("\(scanner.totalDuplicates) 个") }
                                 LabeledContent("可释放空间") { Text(scanner.recoverableSpace.formattedSize) }
                             }
@@ -44,6 +50,9 @@ struct ContentView: View {
                     Menu {
                         Picker("匹配方式", selection: $scanner.mode) {
                             ForEach(MatchingMode.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        Picker("本次新文件校验", selection: $scanner.scanLimit) {
+                            ForEach(ScanLimit.allCases) { Text($0.rawValue).tag($0) }
                         }
                     } label: { Image(systemName: "slider.horizontal.3") }
                 }
@@ -78,6 +87,13 @@ struct ContentView: View {
         .alert("操作提示", isPresented: Binding(get: { scanner.errorMessage != nil }, set: { if !$0 { scanner.errorMessage = nil } })) {
             Button("好", role: .cancel) { scanner.errorMessage = nil }
         } message: { Text(scanner.errorMessage ?? "") }
+        .alert(item: $scanner.feedback) { feedback in
+            Alert(
+                title: Text(feedback.title),
+                message: Text(feedback.message),
+                dismissButton: .default(Text("好"))
+            )
+        }
         .sheet(item: $selectedPreview) { file in FilePreviewSheet(file: file) }
     }
 }
