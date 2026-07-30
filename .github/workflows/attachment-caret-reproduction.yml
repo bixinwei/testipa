@@ -1,0 +1,61 @@
+name: Reproduce Inline Image Caret Crash
+
+on:
+  workflow_dispatch:
+
+jobs:
+  reproduce:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare iPhone 16 Pro Max simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro-Max"
+          RUNTIME="$(xcrun simctl list runtimes available | awk '/com.apple.CoreSimulator.SimRuntime.iOS-/{runtime=$NF} END{print runtime}')"
+          DEVICE="$(xcrun simctl list devices available | awk -F'[()]' '/iPhone 16 Pro Max \(/ {print $2; exit}')"
+          if [[ -z "$DEVICE" ]]; then
+            DEVICE="$(xcrun simctl create 'HelloIPA Caret Repro' "$DEVICE_TYPE" "$RUNTIME")"
+          fi
+          echo "SIM_DEVICE_UDID=$DEVICE" >> "$GITHUB_ENV"
+
+      - name: Build simulator app
+        run: |
+          xcodebuild \
+            -project HelloIPA.xcodeproj \
+            -scheme HelloIPA \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "id=$SIM_DEVICE_UDID" \
+            -derivedDataPath build/Simulator \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Reproduce caret to the right of an inline image
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/Simulator -type d -name HelloIPA.app -print -quit)"
+          mkdir -p build/attachment-caret-diagnostics
+          xcrun simctl boot "$SIM_DEVICE_UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$SIM_DEVICE_UDID" -b
+          xcrun simctl install "$SIM_DEVICE_UDID" "$APP_PATH"
+          xcrun simctl spawn "$SIM_DEVICE_UDID" log stream --style compact --predicate 'process == "HelloIPA"' > build/attachment-caret-diagnostics/live.log 2>&1 &
+          LOG_PID=$!
+          trap 'kill "$LOG_PID" 2>/dev/null || true' EXIT
+          xcrun simctl launch "$SIM_DEVICE_UDID" com.example.helloipa -HelloIPA.AttachmentCaretReproduction
+          sleep 12
+          xcrun simctl io "$SIM_DEVICE_UDID" screenshot build/attachment-caret-diagnostics/after-caret.png || true
+          xcrun simctl spawn "$SIM_DEVICE_UDID" log show --last 2m --style compact --predicate 'process == "HelloIPA" OR eventMessage CONTAINS[c] "HelloIPA"' > build/attachment-caret-diagnostics/system.log || true
+          xcrun simctl diagnose "$SIM_DEVICE_UDID" -l -f build/attachment-caret-diagnostics/simctl-diagnose.tar.gz || true
+
+      - name: Upload reproduction diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: attachment-caret-reproduction
+          path: build/attachment-caret-diagnostics
+          if-no-files-found: error
