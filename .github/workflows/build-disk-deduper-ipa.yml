@@ -1,0 +1,23 @@
+name: Build Disk Deduper IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - 'DiskDeduper/**'
+      - 'scripts/build_disk_deduper_ipa.sh'
+      - '.github/workflows/build-disk-deduper-ipa.yml'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build unsigned app
+        run: bash scripts/build_disk_deduper_ipa.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DiskDeduper-unsigned
+          path: build-output-disk-deduper/DiskDeduper.ipa
+          if-no-files-found: error
