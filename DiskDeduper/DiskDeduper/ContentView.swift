@@ -187,7 +187,7 @@ private struct FileRow: View {
             PreviewThumbnail(file: file).onTapGesture(perform: onPreview)
             VStack(alignment: .leading, spacing: 4) {
                 Text(file.filename).lineLimit(2)
-                Text(file.path)
+                Text(file.cacheKey)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
