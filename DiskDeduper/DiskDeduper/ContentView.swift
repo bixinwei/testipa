@@ -169,18 +169,26 @@ private struct FileRow: View {
             }
         }
         .contentShape(Rectangle())
+        .onTapGesture {
+            guard file.type != .file else { return }
+            onPreview()
+        }
     }
 }
 
 private struct PreviewThumbnail: View {
     let file: DiskFile
+    @State private var thumbnail: UIImage?
+
     var body: some View {
         Group {
-            if file.type == .image, let image = UIImage(contentsOfFile: file.path) { Image(uiImage: image).resizable().scaledToFill() }
-            else if file.type == .video, let image = FilePreview.videoThumbnail(url: file.url) { Image(uiImage: image).resizable().scaledToFill() }
+            if let thumbnail { Image(uiImage: thumbnail).resizable().scaledToFill() }
             else { Image(systemName: file.type == .video ? "film" : "doc").font(.title2).foregroundStyle(.secondary) }
         }
         .frame(width: 60, height: 60).background(Color.secondary.opacity(0.12)).clipShape(RoundedRectangle(cornerRadius: 8))
+        .task(id: file.id) {
+            thumbnail = FilePreview.thumbnail(for: file)
+        }
     }
 }
 

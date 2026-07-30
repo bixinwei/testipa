@@ -51,6 +51,7 @@ final class DuplicateScanner: ObservableObject {
     private let ignoredDefaultsKey = "DiskDeduper.ignoredPaths"
     private let bookmarkDefaultsKey = "DiskDeduper.rootBookmark"
     private var ignoredPaths: Set<String> = []
+    private var accessedRootURL: URL?
 
     init() {
         ignoredPaths = Set(UserDefaults.standard.stringArray(forKey: ignoredDefaultsKey) ?? [])
@@ -61,7 +62,9 @@ final class DuplicateScanner: ObservableObject {
     var recoverableSpace: Int64 { groups.reduce(0) { $0 + $1.spaceToRecover } }
 
     func setRoot(_ url: URL) {
+        stopAccessingRoot()
         rootURL = url
+        beginAccessingRoot(url)
         do {
             let bookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
             UserDefaults.standard.set(bookmark, forKey: bookmarkDefaultsKey)
@@ -115,7 +118,23 @@ final class DuplicateScanner: ObservableObject {
         var stale = false
         guard let url = try? URL(resolvingBookmarkData: data, options: .withoutUI, relativeTo: nil, bookmarkDataIsStale: &stale) else { return }
         rootURL = url
+        beginAccessingRoot(url)
         if stale { setRoot(url) }
+    }
+
+    private func beginAccessingRoot(_ url: URL) {
+        if url.startAccessingSecurityScopedResource() {
+            accessedRootURL = url
+        }
+    }
+
+    private func stopAccessingRoot() {
+        accessedRootURL?.stopAccessingSecurityScopedResource()
+        accessedRootURL = nil
+    }
+
+    deinit {
+        stopAccessingRoot()
     }
 
     nonisolated private static func findDuplicates(
@@ -142,7 +161,9 @@ final class DuplicateScanner: ObservableObject {
                   values.isRegularFile == true,
                   let size = values.fileSize else { continue }
             scanned += 1
-            let contentType = values.contentType
+            // File-provider URLs often omit contentType; fall back to the
+            // extension so images and movies still receive media previews.
+            let contentType = values.contentType ?? UTType(filenameExtension: url.pathExtension)
             let kind: DiskFile.FileKind
             if contentType?.conforms(to: .image) == true { kind = .image }
             else if contentType?.conforms(to: .movie) == true { kind = .video }
@@ -185,6 +206,14 @@ final class DuplicateScanner: ObservableObject {
 }
 
 enum FilePreview {
+    static func thumbnail(for file: DiskFile) -> UIImage? {
+        switch file.type {
+        case .image: return UIImage(contentsOfFile: file.path)
+        case .video: return videoThumbnail(url: file.url)
+        case .file: return nil
+        }
+    }
+
     static func videoThumbnail(url: URL) -> UIImage? {
         let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
         generator.appliesPreferredTrackTransform = true
