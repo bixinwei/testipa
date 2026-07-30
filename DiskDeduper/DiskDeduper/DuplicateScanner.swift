@@ -307,54 +307,89 @@ final class DuplicateScanner: ObservableObject {
     ) -> ScanResult {
         let didAccess = root.startAccessingSecurityScopedResource()
         defer { if didAccess { root.stopAccessingSecurityScopedResource() } }
-        let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey, .contentTypeKey, .contentModificationDateKey]
-        guard let enumerator = FileManager.default.enumerator(
+        // A removable drive can contain hundreds of thousands of files.  Do not
+        // retain every URL just to discover that most sizes are unique: count
+        // sizes first, then materialize metadata only for same-size candidates.
+        let countingKeys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey]
+        guard let countingEnumerator = FileManager.default.enumerator(
             at: root,
-            includingPropertiesForKeys: Array(keys),
+            includingPropertiesForKeys: Array(countingKeys),
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else {
             return ScanResult(groups: [], scannedFiles: 0, reusedHashes: 0, newlyHashed: 0, pendingHashes: 0, cache: [:], errorMessage: "无法读取该文件夹，请重新通过“选择文件夹”授权。")
         }
 
-        var filesBySize: [Int64: [DiskFile]] = [:]
+        var sizeCounts: [Int64: Int] = [:]
         var scanned = 0
-        for case let url as URL in enumerator {
-            let cacheKey = relativePath(of: url, from: root)
-            guard !ignoredPaths.contains(cacheKey),
-                  let values = try? url.resourceValues(forKeys: keys),
-                  values.isRegularFile == true,
-                  let size = values.fileSize else { continue }
-            scanned += 1
-            // File-provider URLs often omit contentType; fall back to the
-            // extension so images and movies still receive media previews.
-            let contentType = values.contentType ?? UTType(filenameExtension: url.pathExtension)
-            let kind: DiskFile.FileKind
-            if contentType?.conforms(to: .image) == true { kind = .image }
-            else if contentType?.conforms(to: .movie) == true { kind = .video }
-            else { kind = .file }
-            let modificationTime = values.contentModificationDate?.timeIntervalSince1970 ?? 0
-            filesBySize[Int64(size), default: []].append(
-                DiskFile(url: url, size: Int64(size), type: kind, cacheKey: cacheKey, modificationTime: modificationTime)
-            )
+        for case let url as URL in countingEnumerator {
+            autoreleasepool {
+                let cacheKey = relativePath(of: url, from: root)
+                guard !ignoredPaths.contains(cacheKey),
+                      let values = try? url.resourceValues(forKeys: countingKeys),
+                      values.isRegularFile == true,
+                      let size = values.fileSize else { return }
+                scanned += 1
+                sizeCounts[Int64(size), default: 0] += 1
+            }
         }
 
-        let sameSize = filesBySize.values.filter { $0.count > 1 }
+        let candidateSizes = Set(sizeCounts.compactMap { size, count in count > 1 ? size : nil })
+        guard !candidateSizes.isEmpty else {
+            return ScanResult(groups: [], scannedFiles: scanned, reusedHashes: 0, newlyHashed: 0, pendingHashes: 0, cache: [:], errorMessage: nil)
+        }
+
+        let detailKeys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey, .contentTypeKey, .contentModificationDateKey]
+        guard let detailEnumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: Array(detailKeys),
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return ScanResult(groups: [], scannedFiles: scanned, reusedHashes: 0, newlyHashed: 0, pendingHashes: 0, cache: [:], errorMessage: "无法再次读取该文件夹，请重新通过“选择文件夹”授权。")
+        }
+
+        var filesBySize: [Int64: [DiskFile]] = [:]
+        for case let url as URL in detailEnumerator {
+            autoreleasepool {
+                let cacheKey = relativePath(of: url, from: root)
+                guard !ignoredPaths.contains(cacheKey),
+                      let values = try? url.resourceValues(forKeys: detailKeys),
+                      values.isRegularFile == true,
+                      let fileSize = values.fileSize else { return }
+                let size = Int64(fileSize)
+                guard candidateSizes.contains(size) else { return }
+
+                // File-provider URLs often omit contentType; fall back to the
+                // extension so images and movies still receive media previews.
+                let contentType = values.contentType ?? UTType(filenameExtension: url.pathExtension)
+                let kind: DiskFile.FileKind
+                if contentType?.conforms(to: .image) == true { kind = .image }
+                else if contentType?.conforms(to: .movie) == true { kind = .video }
+                else { kind = .file }
+                let modificationTime = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+                filesBySize[size, default: []].append(
+                    DiskFile(url: url, size: size, type: kind, cacheKey: cacheKey, modificationTime: modificationTime)
+                )
+            }
+        }
+
         var byDigest: [String: [DiskFile]] = [:]
         var nextCache: [String: CachedDigest] = [:]
-        var needsHash: [DiskFile] = []
+        var filesToHash: [DiskFile] = []
+        var pendingHashCount = 0
         var reused = 0
-        for candidates in sameSize {
+        for candidates in filesBySize.values {
             for file in candidates {
                 if let cached = cachedDigests[file.cacheKey], cached.matches(file) {
                     byDigest[cached.md5, default: []].append(file)
                     nextCache[file.cacheKey] = cached
                     reused += 1
+                } else if filesToHash.count < maximumNewHashes {
+                    filesToHash.append(file)
                 } else {
-                    needsHash.append(file)
+                    pendingHashCount += 1
                 }
             }
         }
-        let filesToHash = Array(needsHash.prefix(maximumNewHashes))
         for file in filesToHash {
             guard let digest = md5(of: file.url) else { continue }
             byDigest[digest, default: []].append(file)
@@ -368,7 +403,7 @@ final class DuplicateScanner: ObservableObject {
             scannedFiles: scanned,
             reusedHashes: reused,
             newlyHashed: filesToHash.count,
-            pendingHashes: max(0, needsHash.count - filesToHash.count),
+            pendingHashes: pendingHashCount,
             cache: nextCache,
             errorMessage: nil
         )
