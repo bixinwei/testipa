@@ -124,6 +124,7 @@ private struct GroupRow: View {
 
 private struct DuplicateGroupView: View {
     @EnvironmentObject private var scanner: DuplicateScanner
+    @Environment(\.dismiss) private var dismiss
     let group: DuplicateGroup
     @Binding var selectedPreview: DiskFile?
     @State private var selected: Set<String>
@@ -152,13 +153,19 @@ private struct DuplicateGroupView: View {
         .navigationTitle("\(group.files.count) 个重复文件")
         .toolbar {
             ToolbarItemGroup(placement: .bottomBar) {
-                Button("忽略选中") { scanner.ignore(selectedFiles) }.disabled(selectedFiles.isEmpty)
+                Button("忽略选中") {
+                    scanner.ignore(selectedFiles)
+                    dismiss()
+                }.disabled(selectedFiles.isEmpty)
                 Spacer()
                 Button("删除选中", role: .destructive) { showingDeleteConfirmation = true }.disabled(selectedFiles.isEmpty)
             }
         }
         .confirmationDialog("删除 \(selectedFiles.count) 个重复文件？", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
-            Button("删除", role: .destructive) { scanner.delete(selectedFiles) }
+            Button("删除", role: .destructive) {
+                scanner.delete(selectedFiles)
+                dismiss()
+            }
         } message: { Text("文件会从移动硬盘中永久删除，无法恢复。") }
     }
 
@@ -180,7 +187,10 @@ private struct FileRow: View {
             PreviewThumbnail(file: file).onTapGesture(perform: onPreview)
             VStack(alignment: .leading, spacing: 4) {
                 Text(file.filename).lineLimit(2)
-                Text(file.path).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                Text(file.path)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(file.size.formattedSize).font(.caption2).foregroundStyle(.secondary)
             }
         }

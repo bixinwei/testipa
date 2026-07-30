@@ -12,7 +12,7 @@ enum MatchingMode: String, CaseIterable, Identifiable {
     var explanatoryText: String {
         switch self {
         case .fileSize: return "快速找出大小相同的文件；内容不一定相同。"
-        case .md5: return "逐个读取候选文件并计算 MD5；结果准确但耗时更长。"
+        case .md5: return "先按大小筛选，仅对同大小候选计算 MD5；结果准确。"
         }
     }
 }
@@ -135,6 +135,7 @@ final class DuplicateScanner: ObservableObject {
     private var ignoredPaths: Set<String> = []
     private var accessedRootURL: URL?
     private let cacheStore = ScanCacheStore()
+    private var currentCache: [String: CachedDigest] = [:]
 
     init() {
         ignoredPaths = Set(UserDefaults.standard.stringArray(forKey: ignoredDefaultsKey) ?? [])
@@ -174,6 +175,7 @@ final class DuplicateScanner: ObservableObject {
         let mode = mode
         let ignored = ignoredPaths
         let cachedDigests = cacheStore.load(for: rootURL)
+        currentCache = cachedDigests
         let limit = scanLimit.maximumHashes
         Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
@@ -191,6 +193,7 @@ final class DuplicateScanner: ObservableObject {
             self.reusedHashes = result.reusedHashes
             self.newlyHashed = result.newlyHashed
             self.pendingHashes = result.pendingHashes
+            self.currentCache = result.cache
             self.cacheStore.save(result.cache, for: rootURL)
             self.isScanning = false
             self.errorMessage = result.errorMessage
@@ -209,16 +212,37 @@ final class DuplicateScanner: ObservableObject {
 
     func delete(_ files: [DiskFile]) {
         var failures: [String] = []
+        var deletedKeys: Set<String> = []
         for file in files {
-            do { try FileManager.default.removeItem(at: file.url) }
+            do {
+                try FileManager.default.removeItem(at: file.url)
+                deletedKeys.insert(file.cacheKey)
+            }
             catch { failures.append(file.filename) }
         }
-        if !failures.isEmpty {
-            errorMessage = "以下文件未能删除：\(failures.joined(separator: "、"))"
-        } else if !files.isEmpty {
-            feedback = ScanFeedback(title: "删除完成", message: "已删除 \(files.count) 个重复文件，并保留未勾选的文件。")
+        guard !deletedKeys.isEmpty || !failures.isEmpty else { return }
+
+        // Do not rescan the drive after each deletion. Remove only the deleted
+        // files from the in-memory result and cache; the next explicit scan
+        // will reconcile metadata changes across the whole selected folder.
+        if !deletedKeys.isEmpty {
+            groups = groups.compactMap { group in
+                let remaining = group.files.filter { !deletedKeys.contains($0.cacheKey) }
+                guard remaining.count > 1 else { return nil }
+                return DuplicateGroup(key: group.key, files: remaining)
+            }
+            currentCache = currentCache.filter { !deletedKeys.contains($0.key) }
+            if let rootURL { cacheStore.save(currentCache, for: rootURL) }
         }
-        scan()
+
+        if failures.isEmpty {
+            feedback = ScanFeedback(title: "删除完成", message: "已删除 \(deletedKeys.count) 个重复文件，当前结果已直接更新。")
+        } else {
+            feedback = ScanFeedback(
+                title: "删除部分完成",
+                message: "已删除 \(deletedKeys.count) 个文件；未能删除：\(failures.joined(separator: "、"))。"
+            )
+        }
     }
 
     private func restoreRoot() {
