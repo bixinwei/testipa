@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 import UIKit
 
 enum ScanLimit: String, CaseIterable, Identifiable {
+    case fiveHundred = "500 个"
     case oneThousand = "1,000 个"
     case fiveThousand = "5,000 个"
     case tenThousand = "10,000 个"
@@ -13,6 +14,7 @@ enum ScanLimit: String, CaseIterable, Identifiable {
     var id: Self { self }
     var maximumHashes: Int {
         switch self {
+        case .fiveHundred: return 500
         case .oneThousand: return 1_000
         case .fiveThousand: return 5_000
         case .tenThousand: return 10_000
