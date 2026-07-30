@@ -8,6 +8,7 @@ final class NoteImageStore {
     static let shared = NoteImageStore()
 
     private let directoryURL: URL
+    private let renderedPreviewCache = NSCache<NSString, UIImage>()
 
     private init() {
         let fileManager = FileManager.default
@@ -28,6 +29,7 @@ final class NoteImageStore {
     func save(originalData: Data, previewData: Data, withID id: UUID) throws {
         try originalData.write(to: originalURL(for: id), options: .atomic)
         try previewData.write(to: previewURL(for: id), options: .atomic)
+        renderedPreviewCache.removeAllObjects()
     }
 
     func originalData(for id: UUID) -> Data? {
@@ -48,9 +50,35 @@ final class NoteImageStore {
         return UIImage(data: data, scale: UIScreen.main.scale)
     }
 
+    func renderedPreview(for id: UUID, maximumPointWidth: CGFloat) -> UIImage? {
+        let scale = UIScreen.main.scale
+        let targetPixelWidth = max(1, Int((maximumPointWidth * scale).rounded(.up)))
+        let cacheKey = "\(id.uuidString)-\(targetPixelWidth)" as NSString
+        if let cached = renderedPreviewCache.object(forKey: cacheKey) {
+            return cached
+        }
+        guard let source = previewImage(for: id) else { return nil }
+
+        let displayWidth = min(maximumPointWidth, source.size.width)
+        let ratio = source.size.width > 0 ? displayWidth / source.size.width : 1
+        let displaySize = CGSize(
+            width: max(1, displayWidth),
+            height: max(1, source.size.height * ratio)
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = false
+        let rendered = UIGraphicsImageRenderer(size: displaySize, format: format).image { _ in
+            source.draw(in: CGRect(origin: .zero, size: displaySize))
+        }
+        renderedPreviewCache.setObject(rendered, forKey: cacheKey)
+        return rendered
+    }
+
     func removeImage(withID id: UUID) {
         try? FileManager.default.removeItem(at: originalURL(for: id))
         try? FileManager.default.removeItem(at: previewURL(for: id))
+        renderedPreviewCache.removeAllObjects()
     }
 
     private func originalURL(for id: UUID) -> URL {
@@ -619,13 +647,16 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         maxImageWidth: CGFloat
     ) -> NSAttributedString {
         let attachment = NSTextAttachment()
-        let sourcePreview = NoteImageStore.shared.previewImage(for: image.id)
+        let sourcePreview = NoteImageStore.shared.renderedPreview(
+            for: image.id,
+            maximumPointWidth: maxImageWidth
+        )
             ?? UIImage(systemName: "photo")
             ?? UIImage()
-        // Decode the preview while constructing the attachment. Otherwise the
-        // first scroll through each large image performs image decoding on the
-        // main rendering path and makes multi-image notes stutter.
-        let preview = sourcePreview.preparingForDisplay() ?? sourcePreview
+        // `renderedPreview` is already decoded and scaled to the attachment's
+        // final display width. Scrolling therefore reuses this bitmap instead
+        // of resampling the original preview texture every frame.
+        let preview = sourcePreview
         attachment.image = preview
 
         let sourceSize = preview.size
