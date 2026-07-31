@@ -863,6 +863,9 @@ final class LocalTextShareServer: ObservableObject {
             .document-editor:focus {
               box-shadow: inset 0 0 0 1px rgba(121, 92, 62, 0.28);
             }
+            .document-editor.is-dragging {
+              box-shadow: inset 0 0 0 2px #007aff;
+            }
             button {
               margin-top: 16px;
               border: 0;
@@ -933,10 +936,13 @@ final class LocalTextShareServer: ObservableObject {
             const imagePicker = document.getElementById('imagePicker');
             const insertImageButton = document.getElementById('insertImageButton');
 
-            function insertImageBlock(block) {
+            function insertImageBlock(block, preferredRange) {
               const selection = window.getSelection();
-              if (selection && selection.rangeCount > 0 && editor.contains(selection.anchorNode)) {
-                const range = selection.getRangeAt(0);
+              const selectedRange = selection && selection.rangeCount > 0 && editor.contains(selection.anchorNode)
+                ? selection.getRangeAt(0)
+                : null;
+              const range = preferredRange || selectedRange;
+              if (range) {
                 range.deleteContents();
                 range.insertNode(block);
                 range.setStartAfter(block);
@@ -958,10 +964,24 @@ final class LocalTextShareServer: ObservableObject {
               });
             }
 
-            insertImageButton.addEventListener('click', () => imagePicker.click());
-            imagePicker.addEventListener('change', async () => {
-              const files = Array.from(imagePicker.files || []);
-              imagePicker.value = '';
+            function rangeAtDropPoint(x, y) {
+              if (document.caretRangeFromPoint) {
+                return document.caretRangeFromPoint(x, y);
+              }
+              if (document.caretPositionFromPoint) {
+                const position = document.caretPositionFromPoint(x, y);
+                if (position) {
+                  const range = document.createRange();
+                  range.setStart(position.offsetNode, position.offset);
+                  range.collapse(true);
+                  return range;
+                }
+              }
+              return null;
+            }
+
+            async function insertImageFiles(files, initialRange) {
+              let preferredRange = initialRange;
               for (const file of files) {
                 if (!file.type.startsWith('image/')) {
                   continue;
@@ -982,12 +1002,37 @@ final class LocalTextShareServer: ObservableObject {
                   image.src = dataURL;
                   image.alt = block.dataset.filename;
                   block.appendChild(image);
-                  insertImageBlock(block);
+                  insertImageBlock(block, preferredRange);
+                  preferredRange = null;
                 } catch (error) {
                   status.textContent = '无法插入图片：' + (error.message || '读取失败');
                   status.style.color = '#b42318';
                 }
               }
+            }
+
+            insertImageButton.addEventListener('click', () => imagePicker.click());
+            imagePicker.addEventListener('change', async () => {
+              const files = Array.from(imagePicker.files || []);
+              imagePicker.value = '';
+              await insertImageFiles(files, null);
+            });
+
+            editor.addEventListener('dragover', (event) => {
+              if (Array.from(event.dataTransfer?.types || []).includes('Files')) {
+                event.preventDefault();
+                editor.classList.add('is-dragging');
+              }
+            });
+            editor.addEventListener('dragleave', () => editor.classList.remove('is-dragging'));
+            editor.addEventListener('drop', async (event) => {
+              const files = Array.from(event.dataTransfer?.files || []);
+              editor.classList.remove('is-dragging');
+              if (files.length === 0) {
+                return;
+              }
+              event.preventDefault();
+              await insertImageFiles(files, rangeAtDropPoint(event.clientX, event.clientY));
             });
 
             function serializeEditor() {
