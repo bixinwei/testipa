@@ -845,6 +845,8 @@ final class LocalTextShareServer: ObservableObject {
               background-size: 100% auto;
               background-position: left top;
               color: var(--text);
+              /* Matches the iOS editor's UIFont(name: "Noteworthy-Bold", size: 19).
+                 Safari resolves Noteworthy from the same system font family. */
               font-family: "Noteworthy", "Marker Felt", "Comic Sans MS", cursive;
               font-size: 19px;
               font-weight: 700;
@@ -852,6 +854,13 @@ final class LocalTextShareServer: ObservableObject {
               white-space: pre-wrap;
               overflow-wrap: anywhere;
               outline: none;
+            }
+            .document-editor a {
+              color: #007aff;
+              font: inherit;
+              text-decoration-line: underline;
+              text-decoration-thickness: 1px;
+              text-underline-offset: 2px;
             }
             .document-editor:focus {
               box-shadow: inset 0 0 0 1px rgba(121, 92, 62, 0.28);
@@ -1061,7 +1070,7 @@ final class LocalTextShareServer: ObservableObject {
         for (_, image) in orderedImages {
             let location = min(max(image.location, cursor), nsText.length)
             if location > cursor {
-                html += escapeHTML(nsText.substring(with: NSRange(location: cursor, length: location - cursor)))
+                html += renderTextHTML(nsText.substring(with: NSRange(location: cursor, length: location - cursor)))
             }
 
             let previewPath = "/preview/\(image.id.uuidString)"
@@ -1079,7 +1088,31 @@ final class LocalTextShareServer: ObservableObject {
         }
 
         if cursor < nsText.length {
-            html += escapeHTML(nsText.substring(from: cursor))
+            html += renderTextHTML(nsText.substring(from: cursor))
+        }
+        return html
+    }
+
+    /// Mirrors the UITextView link detector so shared notes retain their
+    /// blue, underlined links instead of being rendered as plain web text.
+    private static func renderTextHTML(_ text: String) -> String {
+        let range = NSRange(text.startIndex..., in: text)
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        var html = ""
+        var cursor = 0
+
+        detector?.enumerateMatches(in: text, options: [], range: range) { match, _, _ in
+            guard let match, let url = match.url else { return }
+            if match.range.location > cursor {
+                html += escapeHTML((text as NSString).substring(with: NSRange(location: cursor, length: match.range.location - cursor)))
+            }
+            let label = (text as NSString).substring(with: match.range)
+            html += "<a href=\"\(escapeHTML(url.absoluteString))\" target=\"_blank\" rel=\"noopener noreferrer\">\(escapeHTML(label))</a>"
+            cursor = NSMaxRange(match.range)
+        }
+
+        if cursor < (text as NSString).length {
+            html += escapeHTML((text as NSString).substring(from: cursor))
         }
         return html
     }
