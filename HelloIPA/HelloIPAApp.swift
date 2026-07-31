@@ -4,6 +4,7 @@ import Foundation
 import Darwin
 import UIKit
 import Combine
+import CoreText
 
 enum AppDefaults {
     static let savedTextKey = "helloipa.savedText"
@@ -52,7 +53,8 @@ func bundledNoteBodyFont(size: CGFloat) -> UIFont {
         return UIFont(name: "Noteworthy-Bold", size: size)
             ?? .systemFont(ofSize: size, weight: .bold)
     }
-    return UIFont(cgFont: font, size: size)
+    let coreTextFont = CTFontCreateWithGraphicsFont(font, size, nil, nil)
+    return coreTextFont as UIFont
 }
 
 /// Glossy capsule button in the style of pre-iOS7 default UIButtons: top highlight sheen + bevel border.
