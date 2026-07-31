@@ -1093,16 +1093,32 @@ final class LocalTextShareServer: ObservableObject {
     private static func renderTextHTML(_ text: String) -> String {
         let range = NSRange(text.startIndex..., in: text)
         let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        var matches = detector?.matches(in: text, options: [], range: range) ?? []
+        // NSDataDetector can omit app-specific schemes such as `orca://` even
+        // when UITextView turns the same text into a link. Include any explicit
+        // URI scheme as a deterministic fallback for the shared web document.
+        if let schemeDetector = try? NSRegularExpression(
+            pattern: #"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>\"']+"#
+        ) {
+            matches.append(contentsOf: schemeDetector.matches(in: text, range: range))
+        }
+        matches.sort {
+            if $0.range.location == $1.range.location {
+                return $0.range.length > $1.range.length
+            }
+            return $0.range.location < $1.range.location
+        }
+
         var html = ""
         var cursor = 0
 
-        detector?.enumerateMatches(in: text, options: [], range: range) { match, _, _ in
-            guard let match, let url = match.url else { return }
+        for match in matches where match.range.location >= cursor {
+            let label = (text as NSString).substring(with: match.range)
+            guard let href = match.url?.absoluteString ?? URL(string: label)?.absoluteString else { continue }
             if match.range.location > cursor {
                 html += escapeHTML((text as NSString).substring(with: NSRange(location: cursor, length: match.range.location - cursor)))
             }
-            let label = (text as NSString).substring(with: match.range)
-            html += "<a href=\"\(escapeHTML(url.absoluteString))\" target=\"_blank\" rel=\"noopener noreferrer\">\(escapeHTML(label))</a>"
+            html += "<a href=\"\(escapeHTML(href))\" target=\"_blank\" rel=\"noopener noreferrer\">\(escapeHTML(label))</a>"
             cursor = NSMaxRange(match.range)
         }
 
