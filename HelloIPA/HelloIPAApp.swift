@@ -842,13 +842,6 @@ final class LocalTextShareServer: ObservableObject {
               box-shadow: none;
               margin: 0 auto;
             }
-            .eyebrow {
-              margin: 0 0 8px;
-              color: var(--muted);
-              font-size: 13px;
-              letter-spacing: 0.08em;
-              text-transform: uppercase;
-            }
             h1 {
               margin: 0 0 16px;
               font-size: 28px;
@@ -915,13 +908,6 @@ final class LocalTextShareServer: ObservableObject {
               color: #0f5132;
               font-size: 14px;
             }
-            .content {
-              margin-top: 18px;
-              font-size: 14px;
-              color: var(--muted);
-              line-height: 1.7;
-              word-break: break-word;
-            }
             .image-block {
               margin: 14px 0;
               display: block;
@@ -938,14 +924,10 @@ final class LocalTextShareServer: ObservableObject {
               border-radius: 0;
               border: 0;
             }
-            #imagePicker {
-              display: none;
-            }
           </style>
         </head>
         <body>
           <main class="card">
-            <p class="eyebrow">LAN Notes Share</p>
             <h1>来自 iPhone 的备忘录</h1>
             <div
               id="editor"
@@ -954,18 +936,13 @@ final class LocalTextShareServer: ObservableObject {
               role="textbox"
               aria-multiline="true"
             >\(renderedDocument)</div>
-            <input id="imagePicker" type="file" accept="image/*" multiple>
-            <button id="insertImageButton" type="button">插入图片</button>
             <button id="syncButton" type="button">同步到手机</button>
             <div class="status" id="status"></div>
-            <div class="content">可直接编辑正文、插入或删除图片，完成后点击“同步到手机”。长按图片可使用浏览器的原生复制或保存操作。</div>
           </main>
           <script>
             const button = document.getElementById('syncButton');
             const editor = document.getElementById('editor');
             const status = document.getElementById('status');
-            const imagePicker = document.getElementById('imagePicker');
-            const insertImageButton = document.getElementById('insertImageButton');
 
             function insertImageBlock(block, preferredRange) {
               const selection = window.getSelection();
@@ -1041,13 +1018,6 @@ final class LocalTextShareServer: ObservableObject {
                 }
               }
             }
-
-            insertImageButton.addEventListener('click', () => imagePicker.click());
-            imagePicker.addEventListener('change', async () => {
-              const files = Array.from(imagePicker.files || []);
-              imagePicker.value = '';
-              await insertImageFiles(files, null);
-            });
 
             editor.addEventListener('dragover', (event) => {
               if (Array.from(event.dataTransfer?.types || []).includes('Files')) {
@@ -1877,9 +1847,6 @@ struct ShareAddressSheet: View {
                         }
                         .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.54, green: 0.21, blue: 0.16)))
 
-                        Text("电脑打开后会看到当前正文中的文字和图片。")
-                            .font(.footnote)
-                            .foregroundColor(Color.retroMetadata)
                     } else if let errorMessage = server.errorMessage {
                         Text("分享启动失败")
                             .font(.headline)
