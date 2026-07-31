@@ -17,6 +17,11 @@ enum AppDefaults {
 private extension Color {
     static let retroLeatherDark = Color(red: 0.32, green: 0.20, blue: 0.12)
     static let retroLeatherLight = Color(red: 0.56, green: 0.38, blue: 0.23)
+    // Sampled from the visible upper edge of the NotesTopBar leather artwork.
+    // Ending at this lighter, desaturated brown lets the immersive status area
+    // meet the title-bar texture without a hard colour seam.
+    static let retroLeatherStatusTop = Color(red: 0.38, green: 0.26, blue: 0.21)
+    static let retroLeatherStatusBottom = Color(red: 0.52, green: 0.37, blue: 0.32)
     // Match the warm ivory paper and muted graphite rules of the original Notes app.
     static let retroPaper = Color(red: 1.00, green: 0.99, blue: 0.82)
     static let retroPaperLine = Color(red: 0.60, green: 0.56, blue: 0.37)
@@ -1645,7 +1650,11 @@ struct ContentView: View {
             // Keep the existing Notes layout within the safe area.  This layer
             // only becomes visible above it, behind the Dynamic Island/status
             // area, so the title bar's own 60pt position is unchanged.
-            Color.retroLeatherDark
+            LinearGradient(
+                colors: [.retroLeatherStatusTop, .retroLeatherStatusBottom],
+                startPoint: .top,
+                endPoint: .bottom
+            )
                 .ignoresSafeArea(.container, edges: .top)
             OldOSNotesRootView(
                 viewModel: viewModel,
