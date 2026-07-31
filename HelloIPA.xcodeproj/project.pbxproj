@@ -23,6 +23,7 @@
 		A0000000000000000000002A /* oldos-notes-button-center.png in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000003A /* oldos-notes-button-center.png */; };
 		A0000000000000000000002B /* oldos-notes-back-arrow.png in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000003B /* oldos-notes-back-arrow.png */; };
 		A0000000000000000000002C /* oldos-notes-body-margin.png in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000003C /* oldos-notes-body-margin.png */; };
+		A00000000000000000000044 /* Noteworthy-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000045 /* Noteworthy-Bold.ttf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -46,6 +47,7 @@
 		A0000000000000000000003B /* oldos-notes-back-arrow.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/oldos-notes-back-arrow.png"; sourceTree = "<group>"; };
 		A0000000000000000000003C /* oldos-notes-body-margin.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/oldos-notes-body-margin.png"; sourceTree = "<group>"; };
 		A0000000000000000000003D /* OldOSNotes.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = OldOSNotes.xcassets; sourceTree = "<group>"; };
+		A00000000000000000000045 /* Noteworthy-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "../Noteworthy-Bold.ttf"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -77,6 +79,7 @@
 				A00000000000000000000043 /* HelloIPA-Bridging-Header.h */,
 				A00000000000000000000002 /* Info.plist */,
 				A0000000000000000000003D /* OldOSNotes.xcassets */,
+				A00000000000000000000045 /* Noteworthy-Bold.ttf */,
 				A00000000000000000000031 /* oldos-notes-body.png */,
 				A00000000000000000000032 /* oldos-notes-topbar.png */,
 				A00000000000000000000033 /* oldos-notes-back.png */,
@@ -172,6 +175,7 @@
 				A0000000000000000000002B /* oldos-notes-back-arrow.png in Resources */,
 				A0000000000000000000002C /* oldos-notes-body-margin.png in Resources */,
 				A0000000000000000000002D /* OldOSNotes.xcassets in Resources */,
+				A00000000000000000000044 /* Noteworthy-Bold.ttf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

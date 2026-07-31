@@ -642,8 +642,7 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
     let onDocumentChange: (String, [NoteImage]) -> Void
     let onCommit: () -> Void
 
-    private static let noteFont = UIFont(name: "Noteworthy-Bold", size: 19)
-        ?? .systemFont(ofSize: 19, weight: .bold)
+    private static let noteFont = bundledNoteBodyFont(size: 19)
 
     private static let noteAttributes: [NSAttributedString.Key: Any] = [
         .font: noteFont,

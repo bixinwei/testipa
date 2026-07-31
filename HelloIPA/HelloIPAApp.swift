@@ -42,6 +42,19 @@ private func oldOSImage(named name: String) -> Image? {
     return Image(uiImage: image)
 }
 
+/// The same bundled TrueType file is used by UIKit and the local share page.
+/// Creating the UIFont from the file avoids an accidental switch to a similarly
+/// named system font on a future iOS release.
+func bundledNoteBodyFont(size: CGFloat) -> UIFont {
+    guard let url = Bundle.main.url(forResource: "Noteworthy-Bold", withExtension: "ttf"),
+          let provider = CGDataProvider(url: url as CFURL),
+          let font = CGFont(provider) else {
+        return UIFont(name: "Noteworthy-Bold", size: size)
+            ?? .systemFont(ofSize: size, weight: .bold)
+    }
+    return UIFont(cgFont: font, size: size)
+}
+
 /// Glossy capsule button in the style of pre-iOS7 default UIButtons: top highlight sheen + bevel border.
 struct GlossyCapsuleButtonStyle: ButtonStyle {
     let baseColor: Color
@@ -335,7 +348,7 @@ struct StableTextEditor: UIViewRepresentable {
     @Binding var text: String
     let metadata: NoteMetadata
 
-    private static let noteFont = UIFont(name: "Noteworthy-Bold", size: 19) ?? .systemFont(ofSize: 19, weight: .bold)
+    private static let noteFont = bundledNoteBodyFont(size: 19)
     private static let noteTextColor = UIColor.black
 
     private static func noteAttributes() -> [NSAttributedString.Key: Any] {
@@ -691,6 +704,16 @@ final class LocalTextShareServer: ObservableObject {
                         additionalHeaders: ["Cache-Control": "private, max-age=3600"]
                     )
                 } else if request.requestLine.hasPrefix("GET "),
+                          request.path == "/font",
+                          let fontURL = Bundle.main.url(forResource: "Noteworthy-Bold", withExtension: "ttf"),
+                          let fontData = try? Data(contentsOf: fontURL) {
+                    response = self.httpDataResponse(
+                        statusLine: "HTTP/1.1 200 OK\r\n",
+                        contentType: "font/ttf",
+                        body: fontData,
+                        additionalHeaders: ["Cache-Control": "private, max-age=3600"]
+                    )
+                } else if request.requestLine.hasPrefix("GET "),
                           let imageID = Self.previewImageID(from: request.path),
                           self.currentImages.contains(where: { $0.id == imageID }),
                           let previewData = NoteImageStore.shared.previewData(for: imageID) {
@@ -828,6 +851,13 @@ final class LocalTextShareServer: ObservableObject {
               margin: 0 0 16px;
               font-size: 28px;
             }
+            @font-face {
+              font-family: 'HelloIPANoteworthy';
+              src: url('/font') format('truetype');
+              font-style: normal;
+              font-weight: 700;
+              font-display: block;
+            }
             .document-editor {
               width: 100%;
               min-height: 260px;
@@ -843,9 +873,8 @@ final class LocalTextShareServer: ObservableObject {
               background-size: 100% auto;
               background-position: left top;
               color: var(--text);
-              /* Matches the iOS editor's UIFont(name: "Noteworthy-Bold", size: 19).
-                 Safari resolves Noteworthy from the same system font family. */
-              font-family: "Noteworthy", "Marker Felt", "Comic Sans MS", cursive;
+              /* Served from the same bundled TTF that creates the UIKit font. */
+              font-family: "HelloIPANoteworthy", "Noteworthy", "Marker Felt", cursive;
               font-size: 19px;
               font-weight: 700;
               line-height: 1.6;
