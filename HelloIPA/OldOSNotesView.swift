@@ -42,6 +42,19 @@ final class NoteImageStore {
         try? Data(contentsOf: previewURL(for: id), options: .mappedIfSafe)
     }
 
+    func makePreviewData(from image: UIImage) -> Data? {
+        let maxDimension: CGFloat = 1_600
+        let largestDimension = max(image.size.width, image.size.height)
+        let scale = largestDimension > maxDimension ? maxDimension / largestDimension : 1
+        let size = CGSize(
+            width: max(1, image.size.width * scale),
+            height: max(1, image.size.height * scale)
+        )
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let preview = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+        return preview.jpegData(compressionQuality: 0.84)
+    }
+
     func previewImage(for id: UUID) -> UIImage? {
         guard let data = previewData(for: id) else { return nil }
         // Preview JPEGs have no UIKit scale metadata. Treating them as 1×

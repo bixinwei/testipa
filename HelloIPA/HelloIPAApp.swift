@@ -469,7 +469,10 @@ final class LocalTextShareServer: ObservableObject {
 
     private let queue = DispatchQueue(label: "helloipa.local-text-server")
     private let preferredPorts: [UInt16] = [8080, 8081, 8082, 8090]
-    private let maxRequestSize = 1_048_576
+    // Web image insertion uses Base64 JSON. Keep a finite limit so a malformed
+    // browser request cannot exhaust the phone, while leaving enough room for a
+    // normal full-resolution photo plus its Base64 overhead.
+    private let maxRequestSize = 12 * 1_024 * 1_024
     private var listener: NWListener?
     private var currentText: String
     private var currentImages: [NoteImage]
@@ -656,7 +659,7 @@ final class LocalTextShareServer: ObservableObject {
             }
 
             if buffer.count > self.maxRequestSize {
-                let body = "{\"ok\":false,\"error\":\"文本过长，单次同步内容不能超过 1 MB。\"}"
+                let body = "{\"ok\":false,\"error\":\"同步内容过大，单次不能超过 12 MB。\"}"
                 let response = self.httpResponse(
                     statusLine: "HTTP/1.1 413 Payload Too Large\r\n",
                     contentType: "application/json; charset=utf-8",
@@ -901,6 +904,9 @@ final class LocalTextShareServer: ObservableObject {
               border-radius: 0;
               border: 0;
             }
+            #imagePicker {
+              display: none;
+            }
           </style>
         </head>
         <body>
@@ -914,14 +920,75 @@ final class LocalTextShareServer: ObservableObject {
               role="textbox"
               aria-multiline="true"
             >\(renderedDocument)</div>
+            <input id="imagePicker" type="file" accept="image/*" multiple>
+            <button id="insertImageButton" type="button">插入图片</button>
             <button id="syncButton" type="button">同步到手机</button>
             <div class="status" id="status"></div>
-            <div class="content">直接在上方正文中编辑，完成后点击“同步到手机”。长按图片可使用浏览器的原生复制或保存操作。</div>
+            <div class="content">可直接编辑正文、插入或删除图片，完成后点击“同步到手机”。长按图片可使用浏览器的原生复制或保存操作。</div>
           </main>
           <script>
             const button = document.getElementById('syncButton');
             const editor = document.getElementById('editor');
             const status = document.getElementById('status');
+            const imagePicker = document.getElementById('imagePicker');
+            const insertImageButton = document.getElementById('insertImageButton');
+
+            function insertImageBlock(block) {
+              const selection = window.getSelection();
+              if (selection && selection.rangeCount > 0 && editor.contains(selection.anchorNode)) {
+                const range = selection.getRangeAt(0);
+                range.deleteContents();
+                range.insertNode(block);
+                range.setStartAfter(block);
+                range.collapse(true);
+                selection.removeAllRanges();
+                selection.addRange(range);
+              } else {
+                editor.appendChild(block);
+              }
+              editor.focus();
+            }
+
+            function readImageFile(file) {
+              return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onerror = () => reject(new Error('无法读取图片文件'));
+                reader.onload = () => resolve(reader.result);
+                reader.readAsDataURL(file);
+              });
+            }
+
+            insertImageButton.addEventListener('click', () => imagePicker.click());
+            imagePicker.addEventListener('change', async () => {
+              const files = Array.from(imagePicker.files || []);
+              imagePicker.value = '';
+              for (const file of files) {
+                if (!file.type.startsWith('image/')) {
+                  continue;
+                }
+                try {
+                  const dataURL = await readImageFile(file);
+                  const comma = dataURL.indexOf(',');
+                  if (comma < 0) {
+                    throw new Error('图片格式无效');
+                  }
+                  const block = document.createElement('div');
+                  block.className = 'image-block';
+                  block.contentEditable = 'false';
+                  block.dataset.imageData = dataURL.slice(comma + 1);
+                  block.dataset.filename = file.name || 'image';
+                  block.dataset.mimeType = file.type || 'image/jpeg';
+                  const image = document.createElement('img');
+                  image.src = dataURL;
+                  image.alt = block.dataset.filename;
+                  block.appendChild(image);
+                  insertImageBlock(block);
+                } catch (error) {
+                  status.textContent = '无法插入图片：' + (error.message || '读取失败');
+                  status.style.color = '#b42318';
+                }
+              }
+            });
 
             function serializeEditor() {
               const markers = new Map();
@@ -952,11 +1019,22 @@ final class LocalTextShareServer: ObservableObject {
                   append('\\n');
                   return;
                 }
-                if (element.classList.contains('image-block') && element.dataset.imageId) {
+                if (element.classList.contains('image-block')) {
+                  const imageID = element.dataset.imageId;
+                  const imageData = element.dataset.imageData;
+                  if (!imageID && !imageData) {
+                    return;
+                  }
                   appendBlockBreak();
                   const marker = `\\uE000HELLOIPA_IMAGE_${markerIndex}_\\uE001`;
                   markerIndex += 1;
-                  markers.set(marker, element.dataset.imageId);
+                  markers.set(marker, imageID
+                    ? { id: imageID }
+                    : {
+                        data: imageData,
+                        filename: element.dataset.filename || 'image',
+                        mimeType: element.dataset.mimeType || 'image/jpeg'
+                      });
                   append(marker + '\\n');
                   return;
                 }
@@ -982,9 +1060,9 @@ final class LocalTextShareServer: ObservableObject {
               while ((match = markerPattern.exec(linearText)) !== null) {
                 text += linearText.slice(cursor, match.index);
                 const marker = match[0];
-                const id = markers.get(marker);
-                if (id) {
-                  images.push({ id, location: text.length });
+                const image = markers.get(marker);
+                if (image) {
+                  images.push({ ...image, location: text.length });
                 }
                 cursor = match.index + marker.length;
               }
@@ -1015,7 +1093,7 @@ final class LocalTextShareServer: ObservableObject {
                     }
                   } catch (_) {
                     message = response.status === 413
-                      ? '文本过长，无法同步到手机。'
+                      ? '同步内容过大，无法同步到手机。'
                       : '手机返回了错误（HTTP ' + response.status + '）';
                   }
                   throw new Error(message);
@@ -1023,6 +1101,10 @@ final class LocalTextShareServer: ObservableObject {
 
                 status.textContent = '已同步到手机';
                 status.style.color = '#0f5132';
+                // Newly uploaded or repeated images receive fresh resource IDs
+                // on the phone. Reload from the authoritative document so a
+                // second sync never treats those same DOM blocks as new uploads.
+                window.setTimeout(() => window.location.reload(), 300);
               } catch (error) {
                 const rawMessage = error && error.message ? error.message : '';
                 const message = rawMessage.includes('Failed to fetch')
@@ -1128,8 +1210,8 @@ final class LocalTextShareServer: ObservableObject {
         return html
     }
 
-    /// Returns an error instead of applying an empty or malformed web payload.
-    /// A failed browser serialization must never erase the selected note.
+    /// The browser document is the source of truth: it may clear, remove, add,
+    /// or repeat images. Only malformed image data is rejected.
     private func applyWebSync(_ body: String) -> String? {
         guard let data = body.data(using: .utf8),
               let payload = try? JSONDecoder().decode(WebSyncPayload.self, from: data) else {
@@ -1138,32 +1220,112 @@ final class LocalTextShareServer: ObservableObject {
 
         let maximumLocation = (payload.text as NSString).length
         let imagesByID = Dictionary(uniqueKeysWithValues: currentImages.map { ($0.id, $0) })
-        var seenIDs = Set<UUID>()
-        let updatedImages = payload.images.compactMap { position -> NoteImage? in
-            guard seenIDs.insert(position.id).inserted,
-                  var image = imagesByID[position.id] else {
-                return nil
+        var referenceCount = [UUID: Int]()
+        var plans = [WebImagePlan]()
+
+        for position in payload.images {
+            let location = min(max(0, position.location), maximumLocation)
+            if let id = position.id {
+                guard let image = imagesByID[id] else {
+                    return "网页包含无法识别的图片，已取消同步。"
+                }
+                let count = referenceCount[id, default: 0]
+                referenceCount[id] = count + 1
+                if count == 0 {
+                    var positionedImage = image
+                    positionedImage.location = location
+                    plans.append(.existing(positionedImage))
+                } else {
+                    plans.append(.copyOfExisting(image, location: location))
+                }
+                continue
             }
-            image.location = min(max(0, position.location), maximumLocation)
-            return image
+
+            guard let encodedImage = position.data,
+                  let originalData = Data(base64Encoded: encodedImage),
+                  let image = UIImage(data: originalData),
+                  let previewData = NoteImageStore.shared.makePreviewData(from: image) else {
+                return "网页图片数据无效，已取消同步。"
+            }
+            let filename = position.filename?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let mimeType = position.mimeType?.hasPrefix("image/") == true
+                ? position.mimeType!
+                : "image/jpeg"
+            plans.append(.uploaded(
+                originalData: originalData,
+                previewData: previewData,
+                filename: filename?.isEmpty == false ? filename! : "image",
+                mimeType: mimeType,
+                location: location
+            ))
         }
 
-        let currentImageIDs = Set(currentImages.map { $0.id })
-        let receivedImageIDs = Set(updatedImages.map { $0.id })
-        // A web editor is allowed to remove existing image blocks. It must not
-        // invent an ID or repeat one, otherwise accepting the compact-mapped
-        // subset would conceal malformed data.
-        guard updatedImages.count == payload.images.count,
-              receivedImageIDs.isSubset(of: currentImageIDs) else {
-            return "网页包含未知或重复的图片数据，已取消同步以保护手机上的备忘录。"
+        var createdImageIDs = [UUID]()
+        var updatedImages = [NoteImage]()
+        for plan in plans {
+            switch plan {
+            case .existing(let image):
+                updatedImages.append(image)
+            case .copyOfExisting(let image, let location):
+                guard let originalData = NoteImageStore.shared.originalData(for: image.id),
+                      let previewData = NoteImageStore.shared.previewData(for: image.id) else {
+                    createdImageIDs.forEach { NoteImageStore.shared.removeImage(withID: $0) }
+                    return "手机上的原图片已不可用，已取消同步。"
+                }
+                let copiedID = UUID()
+                do {
+                    try NoteImageStore.shared.save(
+                        originalData: originalData,
+                        previewData: previewData,
+                        withID: copiedID
+                    )
+                    createdImageIDs.append(copiedID)
+                    updatedImages.append(NoteImage(
+                        id: copiedID,
+                        location: location,
+                        filename: image.filename,
+                        mimeType: image.mimeType
+                    ))
+                } catch {
+                    createdImageIDs.forEach { NoteImageStore.shared.removeImage(withID: $0) }
+                    return "手机无法保存重复图片，已取消同步。"
+                }
+            case .uploaded(let originalData, let previewData, let filename, let mimeType, let location):
+                let imageID = UUID()
+                do {
+                    try NoteImageStore.shared.save(
+                        originalData: originalData,
+                        previewData: previewData,
+                        withID: imageID
+                    )
+                    createdImageIDs.append(imageID)
+                    updatedImages.append(NoteImage(
+                        id: imageID,
+                        location: location,
+                        filename: filename,
+                        mimeType: mimeType
+                    ))
+                } catch {
+                    createdImageIDs.forEach { NoteImageStore.shared.removeImage(withID: $0) }
+                    return "手机无法保存网页图片，已取消同步。"
+                }
+            }
         }
 
-        let hasText = !payload.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        guard hasText || !updatedImages.isEmpty || (currentText.isEmpty && currentImages.isEmpty) else {
-            return "网页正文为空，已取消同步以保护手机上的备忘录。"
-        }
         updateSharedDocument(text: payload.text, images: updatedImages)
         return nil
+    }
+
+    private enum WebImagePlan {
+        case existing(NoteImage)
+        case copyOfExisting(NoteImage, location: Int)
+        case uploaded(
+            originalData: Data,
+            previewData: Data,
+            filename: String,
+            mimeType: String,
+            location: Int
+        )
     }
 
     private struct WebSyncPayload: Decodable {
@@ -1172,7 +1334,10 @@ final class LocalTextShareServer: ObservableObject {
     }
 
     private struct WebSyncImagePosition: Decodable {
-        let id: UUID
+        let id: UUID?
+        let data: String?
+        let filename: String?
+        let mimeType: String?
         let location: Int
     }
 
