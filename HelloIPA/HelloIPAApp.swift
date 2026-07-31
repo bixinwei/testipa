@@ -1837,11 +1837,21 @@ struct ContentView: View {
 /// 60 pt title bar. Keeping this image behind the transparent title views makes
 /// the leather texture continuous across their boundary.
 private struct ImmersiveNotesTopBarBackground: View {
-    private var statusBarHeight: CGFloat {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .compactMap { $0.statusBarManager?.statusBarFrame.height }
-            .max() ?? 0
+    private var topSafeAreaInset: CGFloat {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let keyWindowInset = scenes
+            .flatMap { $0.windows }
+            .filter(\.isKeyWindow)
+            .map { $0.safeAreaInsets.top }
+            .max()
+        let anyWindowInset = scenes
+            .flatMap { $0.windows }
+            .map { $0.safeAreaInsets.top }
+            .max()
+        return keyWindowInset
+            ?? anyWindowInset
+            ?? scenes.compactMap { $0.statusBarManager?.statusBarFrame.height }.max()
+            ?? 0
     }
 
     var body: some View {
@@ -1850,7 +1860,7 @@ private struct ImmersiveNotesTopBarBackground: View {
                 .resizable()
                 .frame(
                     width: geometry.size.width,
-                    height: statusBarHeight + 60
+                    height: topSafeAreaInset + 60
                 )
                 .clipped()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

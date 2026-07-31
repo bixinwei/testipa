@@ -500,7 +500,10 @@ struct OldOSNotesDestinationView: View {
                             Spacer()
                             Button(action: {
                                 if viewModel.server.isSharingEnabled {
-                                    viewModel.stopSharing()
+                                    // Closing the address page leaves the local server running.
+                                    // Reopen that page on the next tap instead of treating the
+                                    // first tap as an invisible stop operation.
+                                    viewModel.showingShareSheet = true
                                 } else {
                                     viewModel.startSharing()
                                 }
@@ -1226,6 +1229,9 @@ struct OldOSNotesShareTitleBar: View {
 
     var body: some View {
         ZStack {
+            // This overlay sits above the still-visible detail page, so unlike
+            // the main title bar it needs its own opaque background.
+            Image("NotesTopBar").resizable()
             Text("共享地址")
                 .font(.custom("Helvetica Neue Bold", fixedSize: 22))
                 .foregroundColor(.white)
