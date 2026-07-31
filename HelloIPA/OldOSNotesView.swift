@@ -1128,8 +1128,6 @@ struct OldOSNotesTitleBar: View {
 
     var body: some View {
         ZStack {
-            Image("NotesTopBar").resizable()
-
             VStack {
                 Spacer()
                 HStack {
@@ -1228,7 +1226,6 @@ struct OldOSNotesShareTitleBar: View {
 
     var body: some View {
         ZStack {
-            Image("NotesTopBar").resizable()
             Text("共享地址")
                 .font(.custom("Helvetica Neue Bold", fixedSize: 22))
                 .foregroundColor(.white)

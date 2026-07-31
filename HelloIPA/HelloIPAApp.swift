@@ -17,11 +17,6 @@ enum AppDefaults {
 private extension Color {
     static let retroLeatherDark = Color(red: 0.32, green: 0.20, blue: 0.12)
     static let retroLeatherLight = Color(red: 0.56, green: 0.38, blue: 0.23)
-    // Sampled from the visible upper edge of the NotesTopBar leather artwork.
-    // Ending at this lighter, desaturated brown lets the immersive status area
-    // meet the title-bar texture without a hard colour seam.
-    static let retroLeatherStatusTop = Color(red: 0.38, green: 0.26, blue: 0.21)
-    static let retroLeatherStatusBottom = Color(red: 0.52, green: 0.37, blue: 0.32)
     // Match the warm ivory paper and muted graphite rules of the original Notes app.
     static let retroPaper = Color(red: 1.00, green: 0.99, blue: 0.82)
     static let retroPaperLine = Color(red: 0.60, green: 0.56, blue: 0.37)
@@ -1680,15 +1675,10 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
-            // Keep the existing Notes layout within the safe area.  This layer
-            // only becomes visible above it, behind the Dynamic Island/status
-            // area, so the title bar's own 60pt position is unchanged.
-            LinearGradient(
-                colors: [.retroLeatherStatusTop, .retroLeatherStatusBottom],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-                .ignoresSafeArea(.container, edges: .top)
+            // Keep the existing Notes layout within the safe area. This single
+            // background image spans the Dynamic Island/status area and the
+            // transparent 60 pt title bar without moving either layout.
+            ImmersiveNotesTopBarBackground()
             OldOSNotesRootView(
                 viewModel: viewModel,
                 showingDeleteConfirmation: $showingDeleteConfirmation
@@ -1824,6 +1814,27 @@ struct ContentView: View {
 
     private var physical200PixelInset: CGFloat {
         200 / UIScreen.main.scale
+    }
+}
+
+/// Uses one stretched NotesTopBar image for both the status safe area and the
+/// 60 pt title bar. Keeping this image behind the transparent title views makes
+/// the leather texture continuous across their boundary.
+private struct ImmersiveNotesTopBarBackground: View {
+    var body: some View {
+        GeometryReader { geometry in
+            Image("NotesTopBar")
+                .resizable()
+                .frame(
+                    width: geometry.size.width,
+                    height: geometry.safeAreaInsets.top + 60
+                )
+                .clipped()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .ignoresSafeArea(.container, edges: .top)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
