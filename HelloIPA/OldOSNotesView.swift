@@ -508,10 +508,9 @@ struct OldOSNotesDestinationView: View {
                                     viewModel.startSharing()
                                 }
                             }) {
-                                Image("NotesWiFiShare")
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(width: 32, height: 32)
+                                OldOSNotesWiFiStatusIcon(
+                                    isSharing: viewModel.server.isSharingEnabled
+                                )
                             }
                             Spacer()
                             Button(action: { showingDeleteConfirmation = true }) {
@@ -1200,6 +1199,33 @@ struct OldOSNotesHeaderImageButton: View {
             }
         }
         .frame(width: 32, height: 32)
+    }
+}
+
+/// A hand-drawn sharing-state icon. The enabled state uses the existing bitmap;
+/// the default disabled state adds a matching round-capped interruption stroke.
+struct OldOSNotesWiFiStatusIcon: View {
+    let isSharing: Bool
+
+    var body: some View {
+        ZStack {
+            Image("NotesWiFiShare")
+                .resizable()
+                .scaledToFit()
+
+            if !isSharing {
+                Path { path in
+                    path.move(to: CGPoint(x: 6, y: 5))
+                    path.addLine(to: CGPoint(x: 27, y: 27))
+                }
+                .stroke(
+                    Color(red: 138 / 255, green: 73 / 255, blue: 47 / 255),
+                    style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                )
+            }
+        }
+        .frame(width: 32, height: 32)
+        .accessibilityLabel(isSharing ? "分享已开启" : "分享未开启")
     }
 }
 

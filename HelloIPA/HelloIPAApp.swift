@@ -1390,6 +1390,7 @@ final class AppViewModel: ObservableObject {
                 if !isEnabled && self.server.errorMessage == nil {
                     self.showingShareSheet = false
                 }
+                self.objectWillChange.send()
             }
             .store(in: &cancellables)
     }
@@ -1498,6 +1499,7 @@ final class AppViewModel: ObservableObject {
 struct ShareAddressSheet: View {
     @ObservedObject var server: LocalTextShareServer
     let onClose: () -> Void
+    let onStopSharing: () -> Void
     @State private var showingCopiedToast = false
 
     var body: some View {
@@ -1543,6 +1545,14 @@ struct ShareAddressSheet: View {
                             .frame(height: 44)
                         }
                         .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.12, green: 0.34, blue: 0.67)))
+
+                        Button(action: onStopSharing) {
+                            Text("关闭分享")
+                                .font(.custom("Helvetica Neue Bold", size: 17))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 44)
+                        }
+                        .buttonStyle(GlossyCapsuleButtonStyle(baseColor: Color(red: 0.54, green: 0.21, blue: 0.16)))
 
                         Text("电脑打开后会看到当前正文中的文字和图片。")
                             .font(.footnote)
@@ -1704,6 +1714,8 @@ struct ContentView: View {
                     server: viewModel.server
                 ) {
                     viewModel.showingShareSheet = false
+                } onStopSharing: {
+                    viewModel.stopSharing()
                 }
             }
         }
