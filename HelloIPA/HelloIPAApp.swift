@@ -696,7 +696,7 @@ final class LocalTextShareServer: ObservableObject {
                           let previewData = NoteImageStore.shared.previewData(for: imageID) {
                     response = self.httpDataResponse(
                         statusLine: "HTTP/1.1 200 OK\r\n",
-                        contentType: "image/jpeg",
+                        contentType: Self.previewContentType(for: previewData),
                         body: previewData,
                         additionalHeaders: ["Cache-Control": "private, max-age=3600"]
                     )
@@ -1396,6 +1396,13 @@ final class LocalTextShareServer: ObservableObject {
         let components = path.split(separator: "/", omittingEmptySubsequences: true)
         guard components.count == 2, components[0] == "preview" else { return nil }
         return UUID(uuidString: String(components[1]))
+    }
+
+    private static func previewContentType(for data: Data) -> String {
+        // PNG's eight-byte signature lets the web server advertise alpha-bearing
+        // previews correctly without storing another metadata field.
+        let pngSignature: [UInt8] = [137, 80, 78, 71, 13, 10, 26, 10]
+        return data.starts(with: pngSignature) ? "image/png" : "image/jpeg"
     }
 
     private static func parseCompleteRequest(from data: Data) -> (requestLine: String, path: String, body: String)? {

@@ -39,7 +39,25 @@ final class NoteImageStore {
     }
 
     func previewData(for id: UUID) -> Data? {
-        try? Data(contentsOf: previewURL(for: id), options: .mappedIfSafe)
+        guard let storedPreview = try? Data(
+            contentsOf: previewURL(for: id),
+            options: .mappedIfSafe
+        ) else {
+            return nil
+        }
+        // Earlier builds wrote every preview as JPEG. Repair those old previews
+        // lazily from their lossless original so existing transparent PNG notes
+        // regain alpha after installing this version.
+        guard !Self.isPNG(storedPreview),
+              let originalData = originalData(for: id),
+              let originalImage = UIImage(data: originalData),
+              Self.hasAlphaChannel(in: originalImage),
+              let alphaPreview = makePreviewData(from: originalImage) else {
+            return storedPreview
+        }
+        try? alphaPreview.write(to: previewURL(for: id), options: .atomic)
+        renderedPreviewCache.removeAllObjects()
+        return alphaPreview
     }
 
     func makePreviewData(from image: UIImage) -> Data? {
@@ -50,14 +68,20 @@ final class NoteImageStore {
             width: max(1, image.size.width * scale),
             height: max(1, image.size.height * scale)
         )
-        let renderer = UIGraphicsImageRenderer(size: size)
+        let hasAlpha = Self.hasAlphaChannel(in: image)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = !hasAlpha
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
         let preview = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
-        return preview.jpegData(compressionQuality: 0.84)
+        // JPEG destroys transparent pixels. Use PNG only when alpha is present;
+        // opaque photographs retain the much smaller JPEG preview.
+        return hasAlpha ? preview.pngData() : preview.jpegData(compressionQuality: 0.84)
     }
 
     func previewImage(for id: UUID) -> UIImage? {
         guard let data = previewData(for: id) else { return nil }
-        // Preview JPEGs have no UIKit scale metadata. Treating them as 1×
+        // Preview image data has no UIKit scale metadata. Treating it as 1×
         // makes a 1600 px image look 1600 pt wide, so NSTextAttachment must
         // continuously downscale a huge texture while scrolling on a 3× phone.
         // Decode at the active screen scale so its point size matches the
@@ -108,6 +132,22 @@ final class NoteImageStore {
 
     private func previewURL(for id: UUID) -> URL {
         directoryURL.appendingPathComponent("\(id.uuidString).preview.jpg", isDirectory: false)
+    }
+
+    private static func hasAlphaChannel(in image: UIImage) -> Bool {
+        guard let cgImage = image.cgImage else { return false }
+        switch cgImage.alphaInfo {
+        case .first, .last, .premultipliedFirst, .premultipliedLast, .alphaOnly:
+            return true
+        case .none, .noneSkipFirst, .noneSkipLast:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
+    private static func isPNG(_ data: Data) -> Bool {
+        data.starts(with: [137, 80, 78, 71, 13, 10, 26, 10])
     }
 }
 struct PendingNoteImage: Identifiable, Equatable {
@@ -368,7 +408,7 @@ struct OldOSNotesRootView: View {
 
     private func receivePickedImage(_ data: Data, _ filename: String, _ mimeType: String) {
         guard let sourceImage = UIImage(data: data),
-              let previewData = makePreviewData(from: sourceImage) else {
+              let previewData = NoteImageStore.shared.makePreviewData(from: sourceImage) else {
             imageError = OldOSNotesImageError(message: "所选文件不是受支持的图片，或图片数据已损坏。")
             return
         }
@@ -394,24 +434,6 @@ struct OldOSNotesRootView: View {
         }
     }
 
-    private func makePreviewData(from image: UIImage) -> Data? {
-        let maxDimension: CGFloat = 1_600
-        let largestDimension = max(image.size.width, image.size.height)
-        let scale = largestDimension > maxDimension ? maxDimension / largestDimension : 1
-        let size = CGSize(
-            width: max(1, image.size.width * scale),
-            height: max(1, image.size.height * scale)
-        )
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        format.opaque = true
-        let rendered = UIGraphicsImageRenderer(size: size, format: format).image { context in
-            UIColor.white.setFill()
-            context.cgContext.fill(CGRect(origin: .zero, size: size))
-            image.draw(in: CGRect(origin: .zero, size: size))
-        }
-        return rendered.jpegData(compressionQuality: 0.88)
-    }
 }
 
 struct OldOSNotesMainView: View {
