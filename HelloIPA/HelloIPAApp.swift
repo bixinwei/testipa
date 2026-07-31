@@ -1150,8 +1150,12 @@ final class LocalTextShareServer: ObservableObject {
 
         let currentImageIDs = Set(currentImages.map { $0.id })
         let receivedImageIDs = Set(updatedImages.map { $0.id })
-        guard currentImageIDs == receivedImageIDs else {
-            return "网页图片数据不完整，已取消同步以保护手机上的备忘录。"
+        // A web editor is allowed to remove existing image blocks. It must not
+        // invent an ID or repeat one, otherwise accepting the compact-mapped
+        // subset would conceal malformed data.
+        guard updatedImages.count == payload.images.count,
+              receivedImageIDs.isSubset(of: currentImageIDs) else {
+            return "网页包含未知或重复的图片数据，已取消同步以保护手机上的备忘录。"
         }
 
         let hasText = !payload.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
