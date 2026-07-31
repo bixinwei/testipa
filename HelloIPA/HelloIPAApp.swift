@@ -1070,7 +1070,6 @@ final class LocalTextShareServer: ObservableObject {
                   if (!imageID && !imageData) {
                     return;
                   }
-                  appendBlockBreak();
                   const marker = `\\uE000HELLOIPA_IMAGE_${markerIndex}_\\uE001`;
                   markerIndex += 1;
                   markers.set(marker, imageID
@@ -1080,7 +1079,10 @@ final class LocalTextShareServer: ObservableObject {
                         filename: element.dataset.filename || 'image',
                         mimeType: element.dataset.mimeType || 'image/jpeg'
                       });
-                  append(marker + '\\n');
+                  // The image is a zero-width attachment in the note model.
+                  // Its block layout already puts it on a visual line, so do
+                  // not manufacture a text newline each time the page syncs.
+                  append(marker);
                   return;
                 }
 
@@ -1197,15 +1199,9 @@ final class LocalTextShareServer: ObservableObject {
 
             let previewPath = "/preview/\(image.id.uuidString)"
             let filename = escapeHTML(image.filename)
-            html += """
-            <div
-              class="image-block"
-              data-image-id="\(image.id.uuidString)"
-              contenteditable="false"
-            >
-              <img src="\(previewPath)" alt="\(filename)">
-            </div>
-            """
+            // Keep markup compact: indentation/newlines in this string would
+            // become editable text nodes and round-trip as phantom line breaks.
+            html += "<div class=\"image-block\" data-image-id=\"\(image.id.uuidString)\" contenteditable=\"false\"><img src=\"\(previewPath)\" alt=\"\(filename)\"></div>"
             cursor = location
         }
 
