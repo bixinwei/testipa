@@ -1083,6 +1083,13 @@ final class LocalTextShareServer: ObservableObject {
               if (!link || !editor.contains(link)) {
                 return;
               }
+              if (!event.ctrlKey) {
+                // The preceding pointer event has already placed the caret.
+                // Cancel only the anchor's browser navigation, preserving the
+                // ordinary editing click as a cursor-placement gesture.
+                event.preventDefault();
+                return;
+              }
               event.preventDefault();
               window.open(link.href, '_blank', 'noopener,noreferrer');
             });
