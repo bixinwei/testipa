@@ -1035,6 +1035,58 @@ final class LocalTextShareServer: ObservableObject {
               await insertImageFiles(files, rangeAtDropPoint(event.clientX, event.clientY));
             });
 
+            function linkifyEditor() {
+              const textNodes = [];
+              const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+              let node;
+              while ((node = walker.nextNode())) {
+                const parent = node.parentElement;
+                if (!parent || parent.closest('a') || parent.closest('.image-block')) {
+                  continue;
+                }
+                textNodes.push(node);
+              }
+
+              for (const textNode of textNodes) {
+                const value = textNode.nodeValue || '';
+                const urlPattern = /[A-Za-z][A-Za-z0-9+.-]*:\\/\\/[^\\s<>"']+/g;
+                let match;
+                let cursor = 0;
+                let fragment = null;
+                while ((match = urlPattern.exec(value)) !== null) {
+                  if (!fragment) {
+                    fragment = document.createDocumentFragment();
+                  }
+                  if (match.index > cursor) {
+                    fragment.appendChild(document.createTextNode(value.slice(cursor, match.index)));
+                  }
+                  const link = document.createElement('a');
+                  link.href = match[0];
+                  link.target = '_blank';
+                  link.rel = 'noopener noreferrer';
+                  link.textContent = match[0];
+                  fragment.appendChild(link);
+                  cursor = match.index + match[0].length;
+                }
+                if (fragment) {
+                  if (cursor < value.length) {
+                    fragment.appendChild(document.createTextNode(value.slice(cursor)));
+                  }
+                  textNode.replaceWith(fragment);
+                }
+              }
+            }
+
+            editor.addEventListener('blur', linkifyEditor);
+            editor.addEventListener('click', (event) => {
+              const link = event.target instanceof Element ? event.target.closest('a') : null;
+              if (!link || !editor.contains(link)) {
+                return;
+              }
+              event.preventDefault();
+              window.open(link.href, '_blank', 'noopener,noreferrer');
+            });
+
             function serializeEditor() {
               const markers = new Map();
               let markerIndex = 0;
@@ -1079,9 +1131,9 @@ final class LocalTextShareServer: ObservableObject {
                         filename: element.dataset.filename || 'image',
                         mimeType: element.dataset.mimeType || 'image/jpeg'
                       });
-                  // The image is a zero-width attachment in the note model.
-                  // Its block layout already puts it on a visual line, so do
-                  // not manufacture a text newline each time the page syncs.
+                  // The attachment itself is zero-width in the note model.
+                  // Line boundaries are normalized after all markers are read,
+                  // so existing breaks are never duplicated on a later sync.
                   append(marker);
                   return;
                 }
@@ -1103,17 +1155,33 @@ final class LocalTextShareServer: ObservableObject {
               let text = '';
               let cursor = 0;
               let match;
+              let needsBreakAfterImage = false;
 
               while ((match = markerPattern.exec(linearText)) !== null) {
-                text += linearText.slice(cursor, match.index);
+                const segment = linearText.slice(cursor, match.index);
+                // The mobile editor represents every attachment as its own
+                // line. Add a line break only when the surrounding user text
+                // does not already supply one, making repeated syncs stable.
+                if (needsBreakAfterImage && segment.length > 0 && !segment.startsWith('\\n')) {
+                  text += '\\n';
+                }
+                text += segment;
+                if (text.length > 0 && !text.endsWith('\\n')) {
+                  text += '\\n';
+                }
                 const marker = match[0];
                 const image = markers.get(marker);
                 if (image) {
                   images.push({ ...image, location: text.length });
                 }
+                needsBreakAfterImage = true;
                 cursor = match.index + marker.length;
               }
-              text += linearText.slice(cursor);
+              const trailingText = linearText.slice(cursor);
+              if (needsBreakAfterImage && (trailingText.length === 0 || !trailingText.startsWith('\\n'))) {
+                text += '\\n';
+              }
+              text += trailingText;
               return { text, images };
             }
 
