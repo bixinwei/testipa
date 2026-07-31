@@ -1286,12 +1286,21 @@ struct OldOSNotesHeaderTextButton: View {
 
 struct OldOSNotesShareTitleBar: View {
     let closeAction: () -> Void
+    private let titleBarHeight: CGFloat = 60
 
     var body: some View {
-        ZStack {
-            // This overlay sits above the still-visible detail page, so unlike
-            // the main title bar it needs its own opaque background.
-            Image("NotesTopBar").resizable()
+        let topInset = notesTopSafeAreaInset()
+
+        ZStack(alignment: .bottom) {
+            // The sharing page covers the detail page, so it must own an opaque
+            // backdrop. Stretch it over the same safe-area + title-bar extent as
+            // the main immersive header to keep the leather texture continuous.
+            Image("NotesTopBar")
+                .resizable()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+
+            ZStack {
             Text("共享地址")
                 .font(.custom("Helvetica Neue Bold", fixedSize: 22))
                 .foregroundColor(.white)
@@ -1301,8 +1310,10 @@ struct OldOSNotesShareTitleBar: View {
                 OldOSNotesHeaderTextButton(title: "完成", action: closeAction)
                     .padding(.trailing, 5)
             }
+            }
+            .frame(height: titleBarHeight)
         }
-        .frame(height: 60)
+        .frame(height: topInset + titleBarHeight)
     }
 }
 

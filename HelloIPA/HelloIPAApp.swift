@@ -1896,6 +1896,10 @@ struct ShareAddressSheet: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        // The sharing page is a complete cover over the detail page.  Its title
+        // bar accounts for the status safe area itself, so start this hierarchy
+        // at the physical top edge instead of leaving the old page visible there.
+        .ignoresSafeArea(.container, edges: .top)
     }
 
     private func copyAddress() {
@@ -2138,23 +2142,24 @@ struct ContentView: View {
 /// Uses one stretched NotesTopBar image for both the status safe area and the
 /// 60 pt title bar. Keeping this image behind the transparent title views makes
 /// the leather texture continuous across their boundary.
+func notesTopSafeAreaInset() -> CGFloat {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let keyWindowInset = scenes
+        .flatMap { $0.windows }
+        .filter(\.isKeyWindow)
+        .map { $0.safeAreaInsets.top }
+        .max()
+    let anyWindowInset = scenes
+        .flatMap { $0.windows }
+        .map { $0.safeAreaInsets.top }
+        .max()
+    return keyWindowInset
+        ?? anyWindowInset
+        ?? scenes.compactMap { $0.statusBarManager?.statusBarFrame.height }.max()
+        ?? 0
+}
+
 private struct ImmersiveNotesTopBarBackground: View {
-    private var topSafeAreaInset: CGFloat {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let keyWindowInset = scenes
-            .flatMap { $0.windows }
-            .filter(\.isKeyWindow)
-            .map { $0.safeAreaInsets.top }
-            .max()
-        let anyWindowInset = scenes
-            .flatMap { $0.windows }
-            .map { $0.safeAreaInsets.top }
-            .max()
-        return keyWindowInset
-            ?? anyWindowInset
-            ?? scenes.compactMap { $0.statusBarManager?.statusBarFrame.height }.max()
-            ?? 0
-    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -2162,7 +2167,7 @@ private struct ImmersiveNotesTopBarBackground: View {
                 .resizable()
                 .frame(
                     width: geometry.size.width,
-                    height: topSafeAreaInset + 60
+                    height: notesTopSafeAreaInset() + 60
                 )
                 .clipped()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
