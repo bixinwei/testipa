@@ -191,6 +191,7 @@ final class DownloadModel: ObservableObject {
     @Published var apiKey = ""
     @Published var baseURL = "https://api.deepseek.com/v1"
     @Published var model = "deepseek-chat"
+    @Published var availableModels: [String] = []
     @Published var status = "先打开验证浏览器，完成网站验证后再开始下载。"
     @Published var logs: [String] = []
     @Published var progress = 0.0
@@ -217,6 +218,34 @@ final class DownloadModel: ObservableObject {
     func saveConfiguration() {
         saveSettings()
         report("[程序] 配置已保存到本机。")
+    }
+
+    func refreshModels() {
+        guard !apiKey.isEmpty else { report("[程序] 请先填写 API Key，再刷新模型列表。"); return }
+        Task {
+            do {
+                report("[程序] 正在刷新模型列表…")
+                let root = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                guard let endpoint = URL(string: root + "/models") else {
+                    throw DownloadError.invalidResponse("API 地址无效。")
+                }
+                var request = URLRequest(url: endpoint)
+                request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                    throw DownloadError.invalidResponse("模型列表请求失败。")
+                }
+                let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                let entries = payload?["data"] as? [[String: Any]] ?? []
+                let models = entries.compactMap { $0["id"] as? String }.sorted()
+                guard !models.isEmpty else { throw DownloadError.invalidResponse("接口没有返回可用模型。") }
+                availableModels = models
+                if !models.contains(model) { model = models[0] }
+                report("[程序] 已刷新 \(models.count) 个模型。")
+            } catch {
+                report("[程序] 刷新模型列表失败：\(error.localizedDescription)")
+            }
+        }
     }
 
     func togglePause() {
@@ -312,7 +341,14 @@ struct ContentView: View {
                     TextField("小说目录页 URL", text: $model.url).textInputAutocapitalization(.never).keyboardType(.URL)
                     SecureField("DeepSeek API Key", text: $model.apiKey)
                     TextField("API 地址", text: $model.baseURL).textInputAutocapitalization(.never).keyboardType(.URL)
-                    TextField("模型", text: $model.model).textInputAutocapitalization(.never)
+                    if model.availableModels.isEmpty {
+                        TextField("模型", text: $model.model).textInputAutocapitalization(.never)
+                    } else {
+                        Picker("模型", selection: $model.model) {
+                            ForEach(model.availableModels, id: \.self) { Text($0).tag($0) }
+                        }
+                    }
+                    Button("刷新模型列表") { model.refreshModels() }
                     Button("保存配置") { model.saveConfiguration() }
                 }
                 Section("网站验证") {
