@@ -1,6 +1,7 @@
 import SwiftUI
 import WebKit
 import CryptoKit
+import UniformTypeIdentifiers
 
 @main struct WebOfflineSaverApp: App { @StateObject var store = Store(); var body: some Scene { WindowGroup { Home().environmentObject(store) } } }
 struct Plan: Codable { let contentSelector: String; let titleSelector: String?; let excludes: [String] }
@@ -8,6 +9,7 @@ struct CachedPlan: Codable { let version: Int; let plan: Plan }
 struct Item: Codable, Identifiable, Hashable { let id: UUID; let title, url, file: String }
 struct AssetRef: Codable { let url: String; let kind: String }
 struct CapturedPage: Decodable { let title: String; let html: String; let resources: [AssetRef]; let selectedVideo: String?; let missingVideo: Bool? }
+struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var status: String }
 
 @MainActor final class Browser: NSObject, ObservableObject, WKNavigationDelegate {
     let view: WKWebView; var wait: CheckedContinuation<Void,Error>?; var completedURL: URL?
@@ -55,20 +57,55 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
     @Published var api=UserDefaults.standard.string(forKey:"wo.api") ?? "https://api.deepseek.com/v1"
     @Published var model=UserDefaults.standard.string(forKey:"wo.model") ?? "deepseek-chat"
     @Published var force=UserDefaults.standard.bool(forKey:"wo.force")
+    @Published var bookmarkDomains=UserDefaults.standard.string(forKey:"wo.bookmark.domains") ?? ""
     @Published var browserShown = false
     @Published var logs:[String]=[]
     @Published var items:[Item]=[]
     @Published var models:[String]=[]
     @Published var downloading=false
     @Published var downloadStatus=""
+    @Published var bookmarkJobs:[BookmarkJob]=[]
+    @Published var bookmarkRunning=false
+    @Published var bookmarkCurrent=0
+    private var bookmarkStopRequested=false
     let browser=Browser(); let fm=FileManager.default
     var root:URL{fm.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("OfflineLibrary",isDirectory:true)}
     var mediaCache:URL{root.appendingPathComponent("MediaCache",isDirectory:true)}
-    init(){if let d=try?Data(contentsOf:root.appendingPathComponent("catalog.json")){items=(try?JSONDecoder().decode([Item].self,from:d)) ?? []};_ = cleanupOrphanedLibrary()}
+    init(){if let d=try?Data(contentsOf:root.appendingPathComponent("catalog.json")){items=(try?JSONDecoder().decode([Item].self,from:d)) ?? []};if let d=UserDefaults.standard.data(forKey:"wo.bookmark.queue"){bookmarkJobs=(try?JSONDecoder().decode([BookmarkJob].self,from:d)) ?? []};_ = cleanupOrphanedLibrary()}
     func log(_ x:String){logs.append(x);if logs.count>150{logs.removeFirst()}}
-    func saveConfig(){UserDefaults.standard.set(url,forKey:"wo.url");UserDefaults.standard.set(key,forKey:"wo.key");UserDefaults.standard.set(api,forKey:"wo.api");UserDefaults.standard.set(model,forKey:"wo.model");UserDefaults.standard.set(force,forKey:"wo.force");log("[程序] 配置已保存。")}
+    func saveConfig(){UserDefaults.standard.set(url,forKey:"wo.url");UserDefaults.standard.set(key,forKey:"wo.key");UserDefaults.standard.set(api,forKey:"wo.api");UserDefaults.standard.set(model,forKey:"wo.model");UserDefaults.standard.set(force,forKey:"wo.force");UserDefaults.standard.set(bookmarkDomains,forKey:"wo.bookmark.domains");log("[程序] 配置已保存。")}
     func open(){saveConfig();browser.open(url);browserShown=true;log("[程序] 已打开验证浏览器，请完成验证。")}
-    func save(){Task{downloading=true;downloadStatus="正在准备保存网页…";defer{downloading=false;downloadStatus=""};await work()}}
+    func save(){Task{if !bookmarkRunning{bookmarkStopRequested=false};downloading=true;downloadStatus="正在准备保存网页…";defer{downloading=false;downloadStatus=""};_ = await work()}}
+    var bookmarkCompleted: Int { bookmarkJobs.filter{$0.status == "done" || $0.status == "failed"}.count }
+    func persistBookmarkQueue(){UserDefaults.standard.set(try?JSONEncoder().encode(bookmarkJobs),forKey:"wo.bookmark.queue")}
+    func importBookmarks(_ file: URL) {
+        guard let data=try?Data(contentsOf:file) else { log("[程序] 无法读取书签文件。"); return }
+        let text=String(data:data,encoding:.utf8) ?? String(data:data,encoding:.utf16) ?? ""
+        let domains=bookmarkDomains.split(whereSeparator:{ $0.isWhitespace || $0 == "," || $0 == ";" }).map{String($0).lowercased().replacingOccurrences(of:"https://",with:"").replacingOccurrences(of:"http://",with:"").trimmingCharacters(in:CharacterSet(charactersIn:"/"))}.filter{!$0.isEmpty}
+        guard !domains.isEmpty else { log("[程序] 请先填写要匹配的域名列表。"); return }
+        guard let expression=try?NSRegularExpression(pattern:"(?i)href\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]") else { return }
+        let links=expression.matches(in:text,range:NSRange(text.startIndex...,in:text)).compactMap{match -> String? in guard let range=Range(match.range(at:1),in:text),let address=URL(string:String(text[range])),let host=address.host?.lowercased(),["http","https"].contains(address.scheme?.lowercased() ?? "") else{return nil};return domains.contains(where:{host == $0 || host.hasSuffix("."+$0)}) ? address.absoluteString : nil}
+        let known=Set(bookmarkJobs.map{$0.url}.union(items.map{$0.url})); let unique=Array(Set(links)).filter{!known.contains($0)}.sorted()
+        bookmarkJobs += unique.map{BookmarkJob(id:UUID(),url:$0,status:"pending")}; persistBookmarkQueue(); log("[程序] 书签共匹配到 \(links.count) 个网页，已加入 \(unique.count) 个未重复任务。")
+    }
+    func startBookmarkQueue() {
+        guard !bookmarkRunning else{return}; guard !bookmarkJobs.isEmpty else{log("[程序] 暂无书签任务。");return}
+        bookmarkJobs=bookmarkJobs.map{var job=$0;if job.status == "failed"{job.status="pending"};return job};persistBookmarkQueue();bookmarkStopRequested=false;bookmarkRunning=true
+        Task { await runBookmarkQueue() }
+    }
+    func stopBookmarkQueue(){bookmarkStopRequested=true;log("[程序] 已请求暂停；为保护当前网页，正在完成或安全中止当前任务。")}
+    func runBookmarkQueue() async {
+        defer { bookmarkRunning=false;persistBookmarkQueue() }
+        while let index=bookmarkJobs.indices.first(where:{bookmarkJobs[$0].status == "pending"}) {
+            if bookmarkStopRequested || Task.isCancelled { break }
+            bookmarkCurrent=bookmarkCompleted + 1; url=bookmarkJobs[index].url; saveConfig();log("[程序] 正在处理书签任务 \(bookmarkCurrent)/\(bookmarkJobs.count)：\(url)")
+            let succeeded=await work()
+            if bookmarkStopRequested || Task.isCancelled { break }
+            bookmarkJobs[index].status=succeeded ? "done" : "failed";persistBookmarkQueue()
+        }
+        if bookmarkStopRequested { log("[程序] 书签任务已暂停，可随时继续。") }
+        else { log("[程序] 书签队列已处理完成：\(bookmarkCompleted)/\(bookmarkJobs.count)。") }
+    }
     func refreshModels(){Task{await loadModels()}}
     func loadModels() async {
         guard !key.isEmpty, let endpoint = URL(string:api.trimmingCharacters(in:CharacterSet(charactersIn:"/"))+"/models") else { log("[程序] 请先填写 API 地址和 API Key。"); return }
@@ -164,8 +201,9 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
         guard fm.fileExists(atPath:source.path) else{return nil}
         do{try fm.createDirectory(at:mediaCache,withIntermediateDirectories:true);if !fm.fileExists(atPath:cache.path){try fm.copyItem(at:source,to:cache)};try?fm.removeItem(at:source);return "../MediaCache/\(cache.lastPathComponent)"}catch{return nil}
     }
-    func work() async {
-        guard !url.isEmpty, !key.isEmpty else { log("[程序] 请填写网页地址和 API Key。"); return }
+    func work() async -> Bool {
+        guard !url.isEmpty, !key.isEmpty else { log("[程序] 请填写网页地址和 API Key。"); return false }
+        guard !bookmarkStopRequested, !Task.isCancelled else { return false }
         var stage="初始化"
         do {
             saveConfig(); stage="读取已验证网页";log("[程序] 正在读取网页…"); try await browser.load(url)
@@ -213,6 +251,7 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
             try fm.createDirectory(at: assets, withIntermediateDirectories:true)
             var fragment = page.html; var saved=0; var videoOrdinal=0
             for (index, asset) in page.resources.enumerated() {
+                if bookmarkStopRequested || Task.isCancelled { throw CancellationError() }
                 let source=asset.url; let isHLS=source.lowercased().contains(".m3u8")
                 let isVideo=asset.kind == "video"
                 if isVideo { videoOrdinal += 1; if let cache=cachedVideo(pageURL:url,ordinal:videoOrdinal){fragment=fragment.replacingOccurrences(of:source,with:"../MediaCache/\(cache.lastPathComponent)");saved += 1;continue};log("[程序] 视频资源地址：\(source)") }
@@ -224,8 +263,9 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
             }
             let file=dir.appendingPathComponent("index.html")
             let pageHTML="<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><style>body{max-width:760px;margin:24px auto;padding:0 16px;font:17px/1.7 -apple-system}img,video{max-width:100%;height:auto}video{display:block;margin:14px auto}</style>\(fragment)"
-            try pageHTML.write(to:file,atomically:true,encoding:.utf8); let item=Item(id:id,title:page.title.isEmpty ? host : page.title,url:url,file:file.path);items.insert(item,at:0);persist();log("[阶段] 已保存《\(item.title)》；已离线保存 \(saved) 个资源。")
-        } catch { log("[程序] 保存失败（\(stage)）：\(error.localizedDescription)") }
+            try pageHTML.write(to:file,atomically:true,encoding:.utf8); let item=Item(id:id,title:page.title.isEmpty ? host : page.title,url:url,file:file.path);items.insert(item,at:0);persist();log("[阶段] 已保存《\(item.title)》；已离线保存 \(saved) 个资源。"); return true
+        } catch is CancellationError { log("[程序] 当前网页保存已安全暂停。"); return false }
+        catch { log("[程序] 保存失败（\(stage)）：\(error.localizedDescription)"); return false }
     }
     /// Keep only folders and cached videos that are still referenced by catalog.json.
     /// Failed saves create a UUID folder before their later network steps can fail,
@@ -271,7 +311,37 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
 }
 struct Home:View{
     @EnvironmentObject var s:Store
-    var body:some View{NavigationStack{List{Section("网页保存"){TextField("网页地址",text:$s.url).textInputAutocapitalization(.never);SecureField("API Key",text:$s.key);TextField("API 地址",text:$s.api).textInputAutocapitalization(.never);TextField("模型",text:$s.model).textInputAutocapitalization(.never);Button("刷新模型列表"){s.refreshModels()};if !s.models.isEmpty{Picker("已获取模型",selection:$s.model){ForEach(s.models,id:\.self){Text($0).tag($0)}}};Toggle("每次都 AI 识别",isOn:$s.force);Button("保存配置"){s.saveConfig()};Button("打开验证浏览器"){s.open()};Button("保存主体网页"){s.save()}.disabled(s.downloading)};if s.downloading || !s.downloadStatus.isEmpty{Section("下载进度"){HStack{if s.downloading{ProgressView()};Text(s.downloadStatus).font(.subheadline)}}};Section("已下载"){ForEach(s.items){i in NavigationLink(destination:OfflinePreview(item:i)){Text(i.title).foregroundStyle(.primary)}}.onDelete(perform:s.delete)};Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption).textSelection(.enabled)}}}.navigationTitle("网页离线保存器").sheet(isPresented:$s.browserShown){WebSheet(browser:s.browser)}}}
+    @State private var importingBookmarks=false
+    var body:some View{NavigationStack{List{
+        Section("网页保存"){
+            TextField("网页地址",text:$s.url).textInputAutocapitalization(.never)
+            SecureField("API Key",text:$s.key)
+            TextField("API 地址",text:$s.api).textInputAutocapitalization(.never)
+            TextField("模型",text:$s.model).textInputAutocapitalization(.never)
+            Button("刷新模型列表"){s.refreshModels()}
+            if !s.models.isEmpty{Picker("已获取模型",selection:$s.model){ForEach(s.models,id:\.self){Text($0).tag($0)}}}
+            Toggle("每次都 AI 识别",isOn:$s.force)
+            Button("保存配置"){s.saveConfig()}
+            Button("打开验证浏览器"){s.open()}
+            Button("保存主体网页"){s.save()}.disabled(s.downloading || s.bookmarkRunning)
+        }
+        Section("书签批量保存"){
+            TextEditor(text:$s.bookmarkDomains).frame(minHeight:72).textInputAutocapitalization(.never)
+            Text("填写允许的域名；可用换行、逗号或分号分隔。导入 HTML 书签后，仅保存这些域名及其子域名的超链接。").font(.caption).foregroundStyle(.secondary)
+            Button("导入 HTML 书签"){importingBookmarks=true}.disabled(s.bookmarkRunning)
+            if !s.bookmarkJobs.isEmpty {
+                ProgressView(value:Double(s.bookmarkCompleted),total:Double(s.bookmarkJobs.count))
+                Text("任务总数：\(s.bookmarkJobs.count)　已处理：\(s.bookmarkCompleted)　当前：\(s.bookmarkRunning ? s.bookmarkCurrent : 0)").font(.subheadline)
+                HStack {
+                    Button(s.bookmarkRunning ? "正在处理" : "开始／继续"){s.startBookmarkQueue()}.disabled(s.bookmarkRunning)
+                    Button("暂停"){s.stopBookmarkQueue()}.disabled(!s.bookmarkRunning)
+                }
+            }
+        }
+        if s.downloading || !s.downloadStatus.isEmpty{Section("下载进度"){HStack{if s.downloading || s.bookmarkRunning{ProgressView()};Text(s.downloadStatus.isEmpty && s.bookmarkRunning ? "正在处理书签任务…" : s.downloadStatus).font(.subheadline)}}}
+        Section("已下载"){ForEach(s.items){i in NavigationLink(destination:OfflinePreview(item:i)){Text(i.title).foregroundStyle(.primary)}}.onDelete(perform:s.delete)}
+        Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption).textSelection(.enabled)}}
+    }.navigationTitle("网页离线保存器").sheet(isPresented:$s.browserShown){WebSheet(browser:s.browser)}.fileImporter(isPresented:$importingBookmarks,allowedContentTypes:[.html,.plainText],allowsMultipleSelection:false){result in switch result {case .success(let files):guard let file=files.first else{return};let allowed=file.startAccessingSecurityScopedResource();defer{if allowed{file.stopAccessingSecurityScopedResource()}};s.importBookmarks(file);case .failure(let error):s.log("[程序] 导入书签失败：\(error.localizedDescription)")}}}}
 }
 struct Web:UIViewRepresentable{@ObservedObject var browser:Browser;func makeUIView(context:Context)->WKWebView{browser.view};func updateUIView(_ v:WKWebView,context:Context){}}
 struct WebSheet: View {
