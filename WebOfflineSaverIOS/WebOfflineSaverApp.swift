@@ -59,6 +59,8 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
     @Published var logs:[String]=[]
     @Published var items:[Item]=[]
     @Published var models:[String]=[]
+    @Published var downloading=false
+    @Published var downloadStatus=""
     let browser=Browser(); let fm=FileManager.default
     var root:URL{fm.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("OfflineLibrary",isDirectory:true)}
     var mediaCache:URL{root.appendingPathComponent("MediaCache",isDirectory:true)}
@@ -66,7 +68,7 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
     func log(_ x:String){logs.append(x);if logs.count>150{logs.removeFirst()}}
     func saveConfig(){UserDefaults.standard.set(url,forKey:"wo.url");UserDefaults.standard.set(key,forKey:"wo.key");UserDefaults.standard.set(api,forKey:"wo.api");UserDefaults.standard.set(model,forKey:"wo.model");UserDefaults.standard.set(force,forKey:"wo.force");log("[程序] 配置已保存。")}
     func open(){saveConfig();browser.open(url);browserShown=true;log("[程序] 已打开验证浏览器，请完成验证。")}
-    func save(){Task{await work()}}
+    func save(){Task{downloading=true;downloadStatus="正在准备保存网页…";defer{downloading=false};await work()}}
     func refreshModels(){Task{await loadModels()}}
     func loadModels() async {
         guard !key.isEmpty, let endpoint = URL(string:api.trimmingCharacters(in:CharacterSet(charactersIn:"/"))+"/models") else { log("[程序] 请先填写 API 地址和 API Key。"); return }
@@ -117,15 +119,23 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
     func localHLS(_ source: String, assets: URL, number: Int) async -> String? {
         guard let remote=URL(string:source) else { return nil }
         let target=assets.appendingPathComponent(String(format:"%03d.mp4",number))
-        log("[程序] 视频资源地址：\(source)")
+        downloadStatus="正在转存 HLS 视频…"
         let cookies=await browser.cookieHeader(for:remote)
         let requestHeaders=cookies.isEmpty ? "" : "Cookie: \(cookies)\r\n"
+        let monitor=Task { [weak self] in
+            while !Task.isCancelled {
+                let size=((try?target.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0)
+                await MainActor.run { self?.downloadStatus="正在转存 HLS 视频：已写入 \(String(format:"%.1f",Double(size)/1_048_576)) MB" }
+                try? await Task.sleep(nanoseconds:500_000_000)
+            }
+        }
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos:.userInitiated).async {
                 var message: NSString?
                 let succeeded=WOSRemuxHLS(remote,target,self.url,requestHeaders,&message)
                 Task { @MainActor in
-                    if succeeded { self.log("[程序] 已将 HLS 视频转存为本地 MP4。"); continuation.resume(returning:"assets/\(target.lastPathComponent)") }
+                    monitor.cancel()
+                    if succeeded { self.downloadStatus="HLS 视频已转存完成";self.log("[程序] 已将 HLS 视频转存为本地 MP4。"); continuation.resume(returning:"assets/\(target.lastPathComponent)") }
                     else { self.log("[程序] HLS 视频转存失败：\(message as String? ?? "未知错误")"); continuation.resume(returning:nil) }
                 }
             }
@@ -201,6 +211,7 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
                 let source=asset.url; let isHLS=source.lowercased().contains(".m3u8")
                 let isVideo=asset.kind == "video"
                 if isVideo { videoOrdinal += 1; if let cache=cachedVideo(pageURL:url,ordinal:videoOrdinal){fragment=fragment.replacingOccurrences(of:source,with:"../MediaCache/\(cache.lastPathComponent)");saved += 1;continue};log("[程序] 视频资源地址：\(source)") }
+                if isVideo && !isHLS { downloadStatus="正在下载 MP4 视频…" }
                 let downloaded=isHLS ? await localHLS(source,assets:assets,number:index + 1) : await localAsset(source, assets:assets, number:index + 1, imageOnly:asset.kind == "image")
                 let local=isVideo ? downloaded.flatMap{cacheVideo(local:$0,folder:dir,pageURL:url,ordinal:videoOrdinal)} : downloaded
                 if let local { fragment = fragment.replacingOccurrences(of: source, with: local); saved += 1 }
@@ -215,7 +226,7 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
 }
 struct Home:View{
     @EnvironmentObject var s:Store
-    var body:some View{NavigationStack{List{Section("网页保存"){TextField("网页地址",text:$s.url).textInputAutocapitalization(.never);SecureField("API Key",text:$s.key);TextField("API 地址",text:$s.api).textInputAutocapitalization(.never);TextField("模型",text:$s.model).textInputAutocapitalization(.never);Button("刷新模型列表"){s.refreshModels()};if !s.models.isEmpty{Picker("已获取模型",selection:$s.model){ForEach(s.models,id:\.self){Text($0).tag($0)}}};Toggle("每次都 AI 识别",isOn:$s.force);Button("保存配置"){s.saveConfig()};Button("打开验证浏览器"){s.open()};Button("保存主体网页"){s.save()}};Section("已下载"){ForEach(s.items){i in NavigationLink(destination:OfflinePreview(item:i)){Text(i.title).foregroundStyle(.primary)}}.onDelete(perform:s.delete)};Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption).textSelection(.enabled)}}}.navigationTitle("网页离线保存器").sheet(isPresented:$s.browserShown){WebSheet(browser:s.browser)}}}
+    var body:some View{NavigationStack{List{Section("网页保存"){TextField("网页地址",text:$s.url).textInputAutocapitalization(.never);SecureField("API Key",text:$s.key);TextField("API 地址",text:$s.api).textInputAutocapitalization(.never);TextField("模型",text:$s.model).textInputAutocapitalization(.never);Button("刷新模型列表"){s.refreshModels()};if !s.models.isEmpty{Picker("已获取模型",selection:$s.model){ForEach(s.models,id:\.self){Text($0).tag($0)}}};Toggle("每次都 AI 识别",isOn:$s.force);Button("保存配置"){s.saveConfig()};Button("打开验证浏览器"){s.open()};Button("保存主体网页"){s.save()}.disabled(s.downloading)};if s.downloading || !s.downloadStatus.isEmpty{Section("下载进度"){HStack{if s.downloading{ProgressView()};Text(s.downloadStatus).font(.subheadline)}}};Section("已下载"){ForEach(s.items){i in NavigationLink(destination:OfflinePreview(item:i)){Text(i.title).foregroundStyle(.primary)}}.onDelete(perform:s.delete)};Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption).textSelection(.enabled)}}}.navigationTitle("网页离线保存器").sheet(isPresented:$s.browserShown){WebSheet(browser:s.browser)}}}
 }
 struct Web:UIViewRepresentable{@ObservedObject var browser:Browser;func makeUIView(context:Context)->WKWebView{browser.view};func updateUIView(_ v:WKWebView,context:Context){}}
 struct WebSheet: View {
