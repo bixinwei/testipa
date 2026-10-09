@@ -13,13 +13,15 @@ static NSString *WOSFFError(int code) {
     return [NSString stringWithUTF8String:buffer] ?: @"未知 FFmpeg 错误";
 }
 
-BOOL WOSRemuxHLS(NSURL *inputURL, NSURL *outputURL, NSString *referer, NSString **errorMessage) {
+BOOL WOSRemuxHLS(NSURL *inputURL, NSURL *outputURL, NSString *referer, NSString *requestHeaders, NSString **errorMessage) {
     AVFormatContext *input = nullptr;
     AVFormatContext *output = nullptr;
     AVDictionary *options = nullptr;
     int result = 0;
     avformat_network_init();
     if (referer.length > 0) av_dict_set(&options, "referer", referer.UTF8String, 0);
+    NSString *headers = [NSString stringWithFormat:@"Referer: %@\r\nUser-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15\r\n%@", referer ?: @"", requestHeaders ?: @""];
+    av_dict_set(&options, "headers", headers.UTF8String, 0);
     result = avformat_open_input(&input, inputURL.absoluteString.UTF8String, nullptr, &options);
     av_dict_free(&options);
     if (result < 0) goto fail;

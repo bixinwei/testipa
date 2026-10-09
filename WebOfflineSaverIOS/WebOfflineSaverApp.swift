@@ -79,10 +79,12 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
         guard let remote=URL(string:source) else { return nil }
         let target=assets.appendingPathComponent(String(format:"%03d.mp4",number))
         log("[程序] 视频资源地址：\(source)")
+        let cookies=await browser.cookieHeader(for:remote)
+        let requestHeaders=cookies.isEmpty ? "" : "Cookie: \(cookies)\r\n"
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos:.userInitiated).async {
                 var message: NSString?
-                let succeeded=WOSRemuxHLS(remote,target,self.url,&message)
+                let succeeded=WOSRemuxHLS(remote,target,self.url,requestHeaders,&message)
                 Task { @MainActor in
                     if succeeded { self.log("[程序] 已将 HLS 视频转存为本地 MP4。"); continuation.resume(returning:"assets/\(target.lastPathComponent)") }
                     else { self.log("[程序] HLS 视频转存失败：\(message as String? ?? "未知错误")"); continuation.resume(returning:nil) }
@@ -121,7 +123,7 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
 }
 struct Home:View{
     @EnvironmentObject var s:Store
-    var body:some View{NavigationStack{List{Section("网页保存"){TextField("网页地址",text:$s.url).textInputAutocapitalization(.never);SecureField("API Key",text:$s.key);TextField("API 地址",text:$s.api).textInputAutocapitalization(.never);TextField("模型",text:$s.model).textInputAutocapitalization(.never);Button("刷新模型列表"){s.refreshModels()};if !s.models.isEmpty{Picker("已获取模型",selection:$s.model){ForEach(s.models,id:\.self){Text($0).tag($0)}}};Toggle("每次都 AI 识别",isOn:$s.force);Button("保存配置"){s.saveConfig()};Button("打开验证浏览器"){s.open()};Button("保存主体网页"){s.save()}};Section("已下载"){ForEach(s.items){i in NavigationLink(destination:OfflinePreview(item:i)){Text(i.title).foregroundStyle(.primary)}}.onDelete(perform:s.delete)};Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption)}}}.navigationTitle("网页离线保存器").sheet(isPresented:$s.browserShown){WebSheet(browser:s.browser)}}}
+    var body:some View{NavigationStack{List{Section("网页保存"){TextField("网页地址",text:$s.url).textInputAutocapitalization(.never);SecureField("API Key",text:$s.key);TextField("API 地址",text:$s.api).textInputAutocapitalization(.never);TextField("模型",text:$s.model).textInputAutocapitalization(.never);Button("刷新模型列表"){s.refreshModels()};if !s.models.isEmpty{Picker("已获取模型",selection:$s.model){ForEach(s.models,id:\.self){Text($0).tag($0)}}};Toggle("每次都 AI 识别",isOn:$s.force);Button("保存配置"){s.saveConfig()};Button("打开验证浏览器"){s.open()};Button("保存主体网页"){s.save()}};Section("已下载"){ForEach(s.items){i in NavigationLink(destination:OfflinePreview(item:i)){Text(i.title).foregroundStyle(.primary)}}.onDelete(perform:s.delete)};Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption).textSelection(.enabled)}}}.navigationTitle("网页离线保存器").sheet(isPresented:$s.browserShown){WebSheet(browser:s.browser)}}}
 }
 struct Web:UIViewRepresentable{@ObservedObject var browser:Browser;func makeUIView(context:Context)->WKWebView{browser.view};func updateUIView(_ v:WKWebView,context:Context){}}
 struct WebSheet: View {
