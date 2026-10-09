@@ -81,7 +81,7 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos:.userInitiated).async {
                 var message: NSString?
-                let succeeded=WOSRemuxHLS(remote as NSURL,target as NSURL,self.url as NSString,&message)
+                let succeeded=WOSRemuxHLS(remote,target,self.url,&message)
                 Task { @MainActor in
                     if succeeded { self.log("[程序] 已将 HLS 视频转存为本地 MP4。"); continuation.resume(returning:"assets/\(target.lastPathComponent)") }
                     else { self.log("[程序] HLS 视频转存失败：\(message as String? ?? "未知错误")"); continuation.resume(returning:nil) }
