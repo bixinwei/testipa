@@ -5,7 +5,7 @@ import WebKit
 struct Plan: Codable { let contentSelector: String; let titleSelector: String?; let excludes: [String] }
 struct CachedPlan: Codable { let version: Int; let plan: Plan }
 struct Item: Codable, Identifiable, Hashable { let id: UUID; let title, url, file: String }
-struct CapturedPage: Decodable { let title: String; let html: String; let resources: [String]; let selectedVideo: String? }
+struct CapturedPage: Decodable { let title: String; let html: String; let resources: [String]; let selectedVideo: String?; let missingVideo: Bool? }
 
 @MainActor final class Browser: NSObject, ObservableObject, WKNavigationDelegate {
     let view: WKWebView; var wait: CheckedContinuation<Void,Error>?
@@ -21,6 +21,18 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
                 continuation.resume(returning: HTTPCookie.requestHeaderFields(with: applicable)["Cookie"] ?? "")
             }
         }
+    }
+    /// Direct counterpart of desktop `current_page_media_urls`: activate the
+    /// current player, wait, then return video element URLs followed by browser
+    /// resource URLs in their original order.
+    func currentPageMediaURLs() async throws -> [String] {
+        _ = try await js("(()=>{const play=document.querySelector('.tt-video-box .xgplayer-start, .xgplayer-start, video');if(play){try{play.click()}catch(_){}}})()")
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+        let expression="""
+        JSON.stringify((()=>{const videoUrls=[...document.querySelectorAll('video')].flatMap(v=>[v.currentSrc,v.src]).filter(Boolean);const resourceUrls=performance.getEntriesByType('resource').map(e=>e.name).filter(n=>/\\.(?:mp4|m3u8)(?:[?#]|$)|douyinvod|toutiaovod|bytecdn|byteimg|videocdn|\\/video\\/(?:play|stream)/i.test(n));return [...new Set([...videoUrls,...resourceUrls])].filter(x=>/^https?:/i.test(x))})())
+        """
+        guard let raw=try await js(expression) as? String else { return [] }
+        return (try? JSONDecoder().decode([String].self,from:Data(raw.utf8))) ?? []
     }
     func webView(_ w:WKWebView,didFinish n:WKNavigation!){wait?.resume();wait=nil}; func webView(_ w:WKWebView,didFail n:WKNavigation!,withError e:Error){wait?.resume(throwing:e);wait=nil}; func webView(_ w:WKWebView,didFailProvisionalNavigation n:WKNavigation!,withError e:Error){wait?.resume(throwing:e);wait=nil}
 }
@@ -100,14 +112,41 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
             let host = URL(string:url)?.host ?? "site"; let p = try await getPlan(host:host, skeleton:skeleton)
             let q = String(data:try JSONEncoder().encode(p.contentSelector),encoding:.utf8)!; let ex = String(data:try JSONEncoder().encode(p.excludes),encoding:.utf8)!; let ti = String(data:try JSONEncoder().encode(p.titleSelector ?? ""),encoding:.utf8)!
             log("[程序] 正在从已验证浏览器读取视频播放资源…")
-            let baseline = try await browser.js("JSON.stringify([...performance.getEntriesByType('resource')].map(x=>x.name).filter(x=>/\\.(m3u8|mp4)([?#]|$)|toutiaovod|douyinvod|bytecdn|\\/video\\/(play|stream)/i.test(x)))") as? String ?? "[]"
-            _ = try await browser.js("(()=>{const play=document.querySelector('.tt-video-box .xgplayer-start,.xgplayer-start,.dplayer .dplayer-play-icon,.dplayer .dplayer-icon-play,video');if(play){try{play.click()}catch(_){}};const video=document.querySelector('video');if(video){try{video.play().catch(()=>{})}catch(_){}}})()")
-            try await Task.sleep(nanoseconds: 3_000_000_000)
-            let script = """
+            let mediaJSON=String(data:try JSONEncoder().encode(try await browser.currentPageMediaURLs()),encoding:.utf8)!
+            let baseline=mediaJSON
+            let obsoleteScript = """
             (()=>{const n=document.querySelector(\(q));if(!n)return null;const c=n.cloneNode(true);const excludes=\(ex),baseline=new Set(\(baseline));excludes.forEach(s=>{try{c.querySelectorAll(s).forEach(x=>x.remove())}catch(_){}});c.querySelectorAll('script,style,iframe,nav,header,footer,aside,form,.ads,.advertisement,.share,.related,[class*="advert"],[class*="recommend"],[class*="comment"],[id*="advert"],[id*="ads"]').forEach(x=>x.remove());const abs=v=>{try{return new URL(v,document.baseURI).href}catch(_){return v}};const matches=x=>/\\.(m3u8|mp4)([?#]|$)|toutiaovod|douyinvod|bytecdn|\\/video\\/(play|stream)/i.test(x);const playing=[...document.querySelectorAll('video')].flatMap(v=>[v.currentSrc,v.src]).filter(x=>x&&/^https?:/i.test(x)&&matches(x));const allObserved=[...performance.getEntriesByType('resource')].map(x=>x.name).filter(matches).reverse();const observed=allObserved.filter(x=>!baseline.has(x));const declared=(document.documentElement.innerHTML.match(/https?:\\/\\/[^\\s\"'<>]+?\\.(?:m3u8|mp4)(?:\\?[^\\s\"'<>]*)?/ig)||[]).map(x=>x.replace(/\\\\\\//g,'/'));const media=[...new Set([...playing,...observed,...allObserved,...declared])];const images=[...n.querySelectorAll('img')];[...c.querySelectorAll('img')].forEach((x,i)=>{const o=images[i];const v=o?.currentSrc||o?.getAttribute('data-original')||o?.getAttribute('data-lazy-src')||o?.getAttribute('data-src')||o?.getAttribute('src')||x.getAttribute('src');if(v)x.setAttribute('src',abs(v));['srcset','data-src','data-original','data-lazy-src'].forEach(a=>x.removeAttribute(a))});const playerSel='.tt-video-box,[data-vid],[tt-videoid],.dplayer,video[src^="blob:"]';const originalPlayers=[...n.querySelectorAll(playerSel)],copyPlayers=[...c.querySelectorAll(playerSel)];let selectedVideo='';copyPlayers.forEach((box,i)=>{const original=originalPlayers[i];const active=original?.querySelector('video')?.currentSrc||original?.querySelector('video')?.src||'';const attrs=original?[...original.attributes].map(a=>a.value).join(' '):'';const localDeclared=(attrs.match(/https?:\\/\\/[^\\s\"'<>]+?\\.(?:m3u8|mp4)(?:\\?[^\\s\"'<>]*)?/ig)||[]).map(x=>x.replace(/\\\\\\//g,'/'));const v=(active&&matches(active)?active:'')||media.find(u=>/\\.mp4([?#]|$)/i.test(u))||media.find(u=>/\\.m3u8([?#]|$)/i.test(u))||localDeclared.find(u=>matches(u));if(!v)return;selectedVideo=selectedVideo||abs(v);let video=box.matches('video')?box:box.querySelector('video');if(!video){video=document.createElement('video');box.replaceChildren(video)}video.setAttribute('src',abs(v));video.setAttribute('controls','controls');video.removeAttribute('autoplay');video.querySelectorAll('source').forEach(s=>s.remove())});const videos=[...n.querySelectorAll('video')];[...c.querySelectorAll('video')].forEach((x,i)=>{const o=videos[i];let v=o?.currentSrc||o?.getAttribute('src')||o?.querySelector('source')?.getAttribute('src');if(!v||v.startsWith('blob:'))v=media.find(u=>/\\.mp4([?#]|$)/i.test(u))||media.find(u=>/\\.m3u8([?#]|$)/i.test(u));if(v){selectedVideo=selectedVideo||abs(v);x.setAttribute('src',abs(v));x.querySelectorAll('source').forEach(s=>s.remove())}x.setAttribute('controls','controls');x.removeAttribute('autoplay')});const resources=[...new Set([...c.querySelectorAll('img')].map(x=>x.getAttribute('src')).filter(Boolean).concat([...c.querySelectorAll('video')].map(x=>x.getAttribute('src')).filter(Boolean)))];const t=\(ti);return JSON.stringify({title:(t&&document.querySelector(t)?.innerText||c.querySelector('h1')?.innerText||document.title).trim(),html:c.outerHTML,resources,selectedVideo})})()
             """
+            let script = """
+            (()=>{
+              const node=document.querySelector(\(q)); if(!node)return null;
+              const root=node.cloneNode(true), excludes=\(ex), media=\(mediaJSON);
+              const absolute=value=>{try{return new URL(value,document.baseURI).href}catch(_){return value}};
+              const matchesMP4=value=>/\\.mp4(?:[?#]|$)|douyinvod|toutiaovod|bytecdn|videocdn|\\/video\\/(?:play|stream)/i.test(value);
+              const matchesHLS=value=>/\\.m3u8(?:[?#]|$)/i.test(value);
+              const remove=selector=>{try{root.querySelectorAll(selector).forEach(el=>el.remove())}catch(_){}};
+              root.querySelectorAll('script,style,iframe,form,noscript,svg').forEach(el=>el.remove());
+              excludes.forEach(remove);
+              ['nav','[role="navigation"]','.article-ads-btn','.a2a_kit','.post-near','.tags','.article-download','.content-tabs','[class*="advert"]','[class*="ads-"]','[id*="advert"]','[id*="ads-"]'].forEach(remove);
+              [...root.querySelectorAll('blockquote,p,strong')].forEach(el=>{if((el.innerText||'').includes('每日大赛最新地址'))(el.closest('blockquote')||el).remove()});
+              const keyword=[...root.querySelectorAll('p,div,strong')].find(el=>(el.innerText||'').trim().startsWith('关键词：'));
+              if(keyword){const parent=keyword.parentElement;let found=false;[...parent.children].forEach(el=>{if(found)el.remove();if(el===keyword)found=true});keyword.remove()}
+              const urlsFromBox=box=>{const declared=[...box.attributes].flatMap(a=>((a.value||'').replace(/\\\\\\//g,'/').match(/https?:\\/\\/[^\\s\"'<>]+?\\.(?:m3u8|mp4)(?:\\?[^\\s\"'<>]*)?/ig)||[]));return [...new Set([...declared,...media])];};
+              let selectedVideo=''; let missingVideo=false;
+              const replacePlayer=box=>{const urls=urlsFromBox(box), src=urls.find(matchesMP4)||urls.find(matchesHLS);if(!src){missingVideo=true;return;} selectedVideo=selectedVideo||absolute(src);const poster=box.getAttribute('data-poster')||box.getAttribute('tt-poster')||box.querySelector('video')?.getAttribute('poster')||'';const figure=document.createElement('figure');figure.className='offline-video';if(poster){const image=document.createElement('img');image.src=absolute(poster);image.alt='视频封面';figure.append(image)}const video=document.createElement('video');video.src=absolute(src);video.controls=true;video.preload='metadata';if(poster)video.poster=absolute(poster);figure.append(video);box.replaceWith(figure);};
+              [...root.querySelectorAll('.tt-video-box,[data-vid],[tt-videoid]')].forEach(replacePlayer);
+              [...root.querySelectorAll('.dplayer')].filter(el=>el.querySelector('video')).forEach(replacePlayer);
+              [...root.querySelectorAll('video[src^="blob:"]')].forEach(replacePlayer);
+              [...root.querySelectorAll('p')].filter(el=>!(el.innerText||'').trim()&&!el.querySelector('img,video,figure')).forEach(el=>el.remove());
+              root.querySelectorAll('img,video,source').forEach(el=>{const source=el.getAttribute('data-xkrkllgl')||el.getAttribute('data-original')||el.getAttribute('data-lazy-src')||el.getAttribute('data-src')||el.getAttribute('src');if(source)el.setAttribute('src',absolute(source));if(el.tagName==='VIDEO'){el.controls=true;el.preload='metadata'}['srcset','data-src','data-original','data-lazy-src','data-xkrkllgl','onload','onclick','style','autoplay'].forEach(a=>el.removeAttribute(a))});
+              root.querySelectorAll('a[href]').forEach(a=>{a.href=absolute(a.getAttribute('href'));a.target='_blank';a.rel='noopener'});
+              const resources=[...new Set([...root.querySelectorAll('img,video,source')].map(el=>el.getAttribute('src')).filter(Boolean))];
+              const titleSelector=\(ti), title=(titleSelector&&document.querySelector(titleSelector)?.innerText||root.querySelector('h1')?.innerText||document.querySelector('h1.entry-title,h1.post-title,.entry-title,.post-title')?.innerText||document.querySelector('meta[property="og:title"],meta[name="twitter:title"]')?.getAttribute('content')||document.title).trim();
+              return JSON.stringify({title,html:root.outerHTML,resources,selectedVideo,missingVideo});
+            })()
+            """
             guard let raw=try await browser.js(script) as? String else { throw URLError(.cannotParseResponse) }
-            let page = try JSONDecoder().decode(CapturedPage.self, from: Data(raw.utf8)); if let selected=page.selectedVideo,!selected.isEmpty{log("[程序] 已锁定当前播放器视频地址：\(selected)")}; let id=UUID(), dir=root.appendingPathComponent(id.uuidString), assets=dir.appendingPathComponent("assets",isDirectory:true)
+            let page = try JSONDecoder().decode(CapturedPage.self, from: Data(raw.utf8)); if page.missingVideo == true { throw NSError(domain:"WebOfflineSaver",code:2,userInfo:[NSLocalizedDescriptionKey:"未能从已验证页面取得实际视频资源；已取消保存，避免生成伪离线网页。"])}; if let selected=page.selectedVideo,!selected.isEmpty{log("[程序] 已锁定当前播放器视频地址：\(selected)")}; let id=UUID(), dir=root.appendingPathComponent(id.uuidString), assets=dir.appendingPathComponent("assets",isDirectory:true)
             try fm.createDirectory(at: assets, withIntermediateDirectories:true)
             var fragment = page.html; var saved=0
             for (index, source) in page.resources.enumerated() {
