@@ -72,7 +72,7 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
     var root:URL{fm.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("OfflineLibrary",isDirectory:true)}
     var mediaCache:URL{root.appendingPathComponent("MediaCache",isDirectory:true)}
     init(){if let d=try?Data(contentsOf:root.appendingPathComponent("catalog.json")){items=(try?JSONDecoder().decode([Item].self,from:d)) ?? []};if let d=UserDefaults.standard.data(forKey:"wo.bookmark.queue"){bookmarkJobs=(try?JSONDecoder().decode([BookmarkJob].self,from:d)) ?? []};_ = cleanupOrphanedLibrary()}
-    func log(_ x:String){logs.append(x);if logs.count>150{logs.removeFirst()}}
+    func log(_ x:String){logs.append(x);if logs.count>50{logs.removeFirst(logs.count-50)}}
     func saveConfig(){UserDefaults.standard.set(url,forKey:"wo.url");UserDefaults.standard.set(key,forKey:"wo.key");UserDefaults.standard.set(api,forKey:"wo.api");UserDefaults.standard.set(model,forKey:"wo.model");UserDefaults.standard.set(force,forKey:"wo.force");UserDefaults.standard.set(bookmarkDomains,forKey:"wo.bookmark.domains");log("[程序] 配置已保存。")}
     func open(){saveConfig();browser.open(url);browserShown=true;log("[程序] 已打开验证浏览器，请完成验证。")}
     func openBookmarkVerification(){
@@ -102,8 +102,9 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
         defer { bookmarkRunning=false;persistBookmarkQueue() }
         while let index=bookmarkJobs.indices.first(where:{bookmarkJobs[$0].status == "pending"}) {
             if bookmarkStopRequested || Task.isCancelled { break }
-            bookmarkCurrent=bookmarkCompleted + 1; url=bookmarkJobs[index].url; saveConfig();log("[程序] 正在处理书签任务 \(bookmarkCurrent)/\(bookmarkJobs.count)：\(url)")
+            bookmarkCurrent=bookmarkCompleted + 1; url=bookmarkJobs[index].url; downloadStatus="正在准备保存网页…"; saveConfig();log("[程序] 正在处理书签任务 \(bookmarkCurrent)/\(bookmarkJobs.count)：\(url)")
             let succeeded=await work()
+            downloadStatus=""
             if bookmarkStopRequested || Task.isCancelled { break }
             bookmarkJobs[index].status=succeeded ? "done" : "failed";persistBookmarkQueue()
         }
@@ -135,7 +136,7 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
         (()=>{const wanted=\(literal);const image=[...document.images].find(x=>[x.currentSrc,x.src,x.getAttribute('data-xkrkllgl'),x.getAttribute('data-original'),x.getAttribute('data-lazy-src'),x.getAttribute('data-src')].includes(wanted));if(!image)return null;try{const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;if(!canvas.width||!canvas.height)return null;canvas.getContext('2d').drawImage(image,0,0);return canvas.toDataURL('image/png')}catch(_){return null}})()
         """
         guard let value=try?await browser.js(script),let raw=value as? String,let comma=raw.firstIndex(of:","),let data=Data(base64Encoded:String(raw[raw.index(after:comma)...])),validImage(data) else{return nil}
-        let name=String(format:"%03d.png",number);try?data.write(to:assets.appendingPathComponent(name),options:.atomic);log("[程序] 已从验证浏览器的渲染图片生成本地 PNG：\(source)");return "assets/\(name)"
+        let name=String(format:"%03d.png",number);try?data.write(to:assets.appendingPathComponent(name),options:.atomic);return "assets/\(name)"
     }
     func localAsset(_ source: String, assets: URL, number: Int, imageOnly: Bool=false) async -> String? {
         if source.lowercased().hasPrefix("data:image/") {
@@ -153,9 +154,8 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
             let pathExt = remote.pathExtension.lowercased()
             let ext: String = mime.contains("png") ? "png" : mime.contains("jpeg") || mime.contains("jpg") ? "jpg" : mime.contains("gif") ? "gif" : mime.contains("webp") ? "webp" : mime.contains("mp4") ? "mp4" : pathExt.isEmpty ? "bin" : pathExt
             let name = String(format: "%03d.%@", number, ext)
-            guard !imageOnly || validImage(data) else { log("[程序] 图片原文件不是有效图片，尝试读取验证浏览器已渲染的图片：\(source)"); return await renderedImage(source,assets:assets,number:number) }
+            guard !imageOnly || validImage(data) else { return await renderedImage(source,assets:assets,number:number) }
             try data.write(to: assets.appendingPathComponent(name), options: .atomic)
-            if imageOnly { log("[程序] 图片已保存：\(source)") }
             return "assets/\(name)"
         } catch { log("[程序] 资源下载失败：\(source)（\(error.localizedDescription)）"); return imageOnly ? await renderedImage(source,assets:assets,number:number) : nil }
     }
@@ -315,7 +315,16 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
 }
 struct Home:View{
     @EnvironmentObject var s:Store
-    @State private var importingBookmarks=false
+    var body:some View{
+        TabView {
+            WebSaveTab().tabItem{Label("网页保存",systemImage:"square.and.pencil")}
+            BookmarkBatchTab().tabItem{Label("书签批量保存",systemImage:"book")}
+            DownloadedTab().tabItem{Label("已下载",systemImage:"tray.full")}
+        }.sheet(isPresented:$s.browserShown){WebSheet(browser:s.browser)}
+    }
+}
+struct WebSaveTab:View{
+    @EnvironmentObject var s:Store
     var body:some View{NavigationStack{List{
         Section("网页保存"){
             TextField("网页地址",text:$s.url).textInputAutocapitalization(.never)
@@ -329,6 +338,14 @@ struct Home:View{
             Button("打开验证浏览器"){s.open()}
             Button("保存主体网页"){s.save()}.disabled(s.downloading || s.bookmarkRunning)
         }
+        if s.downloading || !s.downloadStatus.isEmpty{Section("下载进度"){HStack{if s.downloading{ProgressView()};Text(s.downloadStatus).font(.subheadline)}}}
+        Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption).textSelection(.enabled)}}
+    }.navigationTitle("网页保存")}}
+}
+struct BookmarkBatchTab:View{
+    @EnvironmentObject var s:Store
+    @State private var importingBookmarks=false
+    var body:some View{NavigationStack{List{
         Section("书签批量保存"){
             TextEditor(text:$s.bookmarkDomains).frame(minHeight:72).textInputAutocapitalization(.never)
             Text("填写允许的域名；可用换行、逗号或分号分隔。导入 HTML 书签后，仅保存这些域名及其子域名的超链接。").font(.caption).foregroundStyle(.secondary)
@@ -343,10 +360,13 @@ struct Home:View{
                 }
             }
         }
-        if s.downloading || !s.downloadStatus.isEmpty{Section("下载进度"){HStack{if s.downloading || s.bookmarkRunning{ProgressView()};Text(s.downloadStatus.isEmpty && s.bookmarkRunning ? "正在处理书签任务…" : s.downloadStatus).font(.subheadline)}}}
-        Section("已下载"){ForEach(s.items){i in NavigationLink(destination:OfflinePreview(item:i)){Text(i.title).foregroundStyle(.primary)}}.onDelete(perform:s.delete)}
+        if s.bookmarkRunning || !s.downloadStatus.isEmpty{Section("任务进度"){HStack{if s.bookmarkRunning{ProgressView()};Text(s.downloadStatus.isEmpty ? "正在处理书签任务…" : s.downloadStatus).font(.subheadline)}}}
         Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption).textSelection(.enabled)}}
-    }.navigationTitle("网页离线保存器").sheet(isPresented:$s.browserShown){WebSheet(browser:s.browser)}.fileImporter(isPresented:$importingBookmarks,allowedContentTypes:[.html,.plainText],allowsMultipleSelection:false){result in switch result {case .success(let files):guard let file=files.first else{return};let allowed=file.startAccessingSecurityScopedResource();defer{if allowed{file.stopAccessingSecurityScopedResource()}};s.importBookmarks(file);case .failure(let error):s.log("[程序] 导入书签失败：\(error.localizedDescription)")}}}}
+    }.navigationTitle("书签批量保存").fileImporter(isPresented:$importingBookmarks,allowedContentTypes:[.html,.plainText],allowsMultipleSelection:false){result in switch result {case .success(let files):guard let file=files.first else{return};let allowed=file.startAccessingSecurityScopedResource();defer{if allowed{file.stopAccessingSecurityScopedResource()}};s.importBookmarks(file);case .failure(let error):s.log("[程序] 导入书签失败：\(error.localizedDescription)")}}}
+}
+struct DownloadedTab:View{
+    @EnvironmentObject var s:Store
+    var body:some View{NavigationStack{List{Section("已下载网页"){if s.items.isEmpty{Text("尚未保存网页").foregroundStyle(.secondary)}else{ForEach(s.items){item in NavigationLink(destination:OfflinePreview(item:item)){Text(item.title).foregroundStyle(.primary)}}.onDelete(perform:s.delete)}}}.navigationTitle("已下载")}}
 }
 struct Web:UIViewRepresentable{@ObservedObject var browser:Browser;func makeUIView(context:Context)->WKWebView{browser.view};func updateUIView(_ v:WKWebView,context:Context){}}
 struct WebSheet: View {
