@@ -256,7 +256,18 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
         }
         return removed
     }
-    func delete(_ o:IndexSet){for i in o{try?fm.removeItem(at:URL(fileURLWithPath:items[i].file).deletingLastPathComponent())};items.remove(atOffsets:o);persist();let removed=cleanupOrphanedLibrary();log("[程序] 已删除网页及对应资源。\(removed > 0 ? \"已额外清理 \\(removed) 项遗留资源。\" : \"\")")};func persist(){try?fm.createDirectory(at:root,withIntermediateDirectories:true);try?JSONEncoder().encode(items).write(to:root.appendingPathComponent("catalog.json"))}
+    func delete(_ offsets: IndexSet) {
+        for index in offsets {
+            try? fm.removeItem(at: URL(fileURLWithPath: items[index].file).deletingLastPathComponent())
+        }
+        items.remove(atOffsets: offsets)
+        persist()
+        let removed = cleanupOrphanedLibrary()
+        var message = "[程序] 已删除网页及对应资源。"
+        if removed > 0 { message += "已额外清理 \(removed) 项遗留资源。" }
+        log(message)
+    }
+    func persist(){try?fm.createDirectory(at:root,withIntermediateDirectories:true);try?JSONEncoder().encode(items).write(to:root.appendingPathComponent("catalog.json"))}
 }
 struct Home:View{
     @EnvironmentObject var s:Store
