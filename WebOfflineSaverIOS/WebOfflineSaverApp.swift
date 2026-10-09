@@ -85,7 +85,7 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
         guard !domains.isEmpty else { log("[程序] 请先填写要匹配的域名列表。"); return }
         guard let expression=try?NSRegularExpression(pattern:"(?i)href\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]") else { return }
         let links=expression.matches(in:text,range:NSRange(text.startIndex...,in:text)).compactMap{match -> String? in guard let range=Range(match.range(at:1),in:text),let address=URL(string:String(text[range])),let host=address.host?.lowercased(),["http","https"].contains(address.scheme?.lowercased() ?? "") else{return nil};return domains.contains(where:{host == $0 || host.hasSuffix("."+$0)}) ? address.absoluteString : nil}
-        let known=Set(bookmarkJobs.map{$0.url}.union(items.map{$0.url})); let unique=Array(Set(links)).filter{!known.contains($0)}.sorted()
+        let known=Set(bookmarkJobs.map{$0.url}).union(Set(items.map{$0.url})); let unique=Array(Set(links)).filter{!known.contains($0)}.sorted()
         bookmarkJobs += unique.map{BookmarkJob(id:UUID(),url:$0,status:"pending")}; persistBookmarkQueue(); log("[程序] 书签共匹配到 \(links.count) 个网页，已加入 \(unique.count) 个未重复任务。")
     }
     func startBookmarkQueue() {
