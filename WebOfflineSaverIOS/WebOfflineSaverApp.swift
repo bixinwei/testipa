@@ -15,6 +15,13 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
     func open(_ s:String){if let u=URL(string:s){view.load(URLRequest(url:u))}}
     func load(_ s:String) async throws {guard let u=URL(string:s)else{throw URLError(.badURL)};try await withCheckedThrowingContinuation{(c:CheckedContinuation<Void,Error>) in wait=c;view.load(URLRequest(url:u))}}
     func js(_ s:String) async throws->Any {try await withCheckedThrowingContinuation{c in view.evaluateJavaScript(s){v,e in if let e{c.resume(throwing:e)}else{c.resume(returning:v as Any)}}}}
+    func asyncJS(_ script:String) async throws -> Any {
+        try await withCheckedThrowingContinuation { continuation in
+            view.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page) { value, error in
+                if let error { continuation.resume(throwing:error) } else { continuation.resume(returning:value as Any) }
+            }
+        }
+    }
     func cookieHeader(for url: URL) async -> String {
         await withCheckedContinuation { continuation in
             view.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
@@ -74,6 +81,14 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
         let bytes=[UInt8](data.prefix(16))
         return bytes.starts(with:[0xFF,0xD8,0xFF]) || bytes.starts(with:[0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A]) || bytes.starts(with:[0x47,0x49,0x46,0x38]) || (bytes.count >= 12 && Array(bytes[0..<4]) == [0x52,0x49,0x46,0x46] && Array(bytes[8..<12]) == [0x57,0x45,0x42,0x50]) || (bytes.count >= 12 && String(bytes:bytes[4..<12],encoding:.ascii)?.contains("ftypavif") == true)
     }
+    func renderedImage(_ source:String, assets:URL, number:Int) async -> String? {
+        guard let encoded=try?JSONEncoder().encode(source),let literal=String(data:encoded,encoding:.utf8) else{return nil}
+        let script="""
+        (async()=>{const wanted=\(literal);const image=[...document.images].find(x=>x.currentSrc===wanted||x.src===wanted);if(!image)return null;try{await image.decode()}catch(_){};try{const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;if(!canvas.width||!canvas.height)return null;canvas.getContext('2d').drawImage(image,0,0);return canvas.toDataURL('image/png')}catch(_){return null}})()
+        """
+        guard let value=try?await browser.asyncJS(script),let raw=value as? String,let comma=raw.firstIndex(of:","),let data=Data(base64Encoded:String(raw[raw.index(after:comma)...])),validImage(data) else{return nil}
+        let name=String(format:"%03d.png",number);try?data.write(to:assets.appendingPathComponent(name),options:.atomic);log("[程序] 已从验证浏览器的渲染图片生成本地 PNG：\(source)");return "assets/\(name)"
+    }
     func localAsset(_ source: String, assets: URL, number: Int, imageOnly: Bool=false) async -> String? {
         if source.lowercased().hasPrefix("data:image/") {
             let parts=source.split(separator:",",maxSplits:1).map(String.init)
@@ -83,18 +98,18 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
         }
         guard let remote = URL(string: source), ["http", "https"].contains(remote.scheme?.lowercased() ?? "") else { return nil }
         do {
-            var request = URLRequest(url: remote); request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)", forHTTPHeaderField: "User-Agent"); request.setValue(url,forHTTPHeaderField:"Referer"); let cookies=await browser.cookieHeader(for:remote); if !cookies.isEmpty{request.setValue(cookies,forHTTPHeaderField:"Cookie")}
+            var request = URLRequest(url: remote); request.setValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36", forHTTPHeaderField: "User-Agent"); request.setValue(imageOnly ? "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8" : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",forHTTPHeaderField:"Accept");request.setValue("zh-CN,zh;q=0.9,en;q=0.8",forHTTPHeaderField:"Accept-Language");request.setValue(url,forHTTPHeaderField:"Referer"); let cookies=await browser.cookieHeader(for:remote); if !cookies.isEmpty{request.setValue(cookies,forHTTPHeaderField:"Cookie")}
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), !data.isEmpty else { return nil }
             let mime = (response.mimeType ?? "").lowercased()
             let pathExt = remote.pathExtension.lowercased()
             let ext: String = mime.contains("png") ? "png" : mime.contains("jpeg") || mime.contains("jpg") ? "jpg" : mime.contains("gif") ? "gif" : mime.contains("webp") ? "webp" : mime.contains("mp4") ? "mp4" : pathExt.isEmpty ? "bin" : pathExt
             let name = String(format: "%03d.%@", number, ext)
-            guard !imageOnly || validImage(data) else { log("[程序] 图片原文件不是有效图片，未将防盗链响应写入离线库：\(source)"); return nil }
+            guard !imageOnly || validImage(data) else { log("[程序] 图片原文件不是有效图片，尝试读取验证浏览器已渲染的图片：\(source)"); return await renderedImage(source,assets:assets,number:number) }
             try data.write(to: assets.appendingPathComponent(name), options: .atomic)
             if imageOnly { log("[程序] 图片已保存：\(source)") }
             return "assets/\(name)"
-        } catch { log("[程序] 资源下载失败：\(source)（\(error.localizedDescription)）"); return nil }
+        } catch { log("[程序] 资源下载失败：\(source)（\(error.localizedDescription)）"); return imageOnly ? await renderedImage(source,assets:assets,number:number) : nil }
     }
     func localHLS(_ source: String, assets: URL, number: Int) async -> String? {
         guard let remote=URL(string:source) else { return nil }
