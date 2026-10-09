@@ -64,7 +64,7 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
     let browser=Browser(); let fm=FileManager.default
     var root:URL{fm.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("OfflineLibrary",isDirectory:true)}
     var mediaCache:URL{root.appendingPathComponent("MediaCache",isDirectory:true)}
-    init(){if let d=try?Data(contentsOf:root.appendingPathComponent("catalog.json")){items=(try?JSONDecoder().decode([Item].self,from:d)) ?? []}}
+    init(){if let d=try?Data(contentsOf:root.appendingPathComponent("catalog.json")){items=(try?JSONDecoder().decode([Item].self,from:d)) ?? []};_ = cleanupOrphanedLibrary()}
     func log(_ x:String){logs.append(x);if logs.count>150{logs.removeFirst()}}
     func saveConfig(){UserDefaults.standard.set(url,forKey:"wo.url");UserDefaults.standard.set(key,forKey:"wo.key");UserDefaults.standard.set(api,forKey:"wo.api");UserDefaults.standard.set(model,forKey:"wo.model");UserDefaults.standard.set(force,forKey:"wo.force");log("[程序] 配置已保存。")}
     func open(){saveConfig();browser.open(url);browserShown=true;log("[程序] 已打开验证浏览器，请完成验证。")}
@@ -227,7 +227,36 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
             try pageHTML.write(to:file,atomically:true,encoding:.utf8); let item=Item(id:id,title:page.title.isEmpty ? host : page.title,url:url,file:file.path);items.insert(item,at:0);persist();log("[阶段] 已保存《\(item.title)》；已离线保存 \(saved) 个资源。")
         } catch { log("[程序] 保存失败（\(stage)）：\(error.localizedDescription)") }
     }
-    func delete(_ o:IndexSet){for i in o{try?fm.removeItem(at:URL(fileURLWithPath:items[i].file).deletingLastPathComponent())};items.remove(atOffsets:o);persist()};func persist(){try?fm.createDirectory(at:root,withIntermediateDirectories:true);try?JSONEncoder().encode(items).write(to:root.appendingPathComponent("catalog.json"))}
+    /// Keep only folders and cached videos that are still referenced by catalog.json.
+    /// Failed saves create a UUID folder before their later network steps can fail,
+    /// so this also cleans up abandoned partial downloads on the next launch.
+    @discardableResult func cleanupOrphanedLibrary() -> Int {
+        let activeFolders=Set(items.map{URL(fileURLWithPath:$0.file).deletingLastPathComponent().standardizedFileURL.path})
+        var removed=0
+        if let entries=try?fm.contentsOfDirectory(at:root,includingPropertiesForKeys:[.isDirectoryKey],options:.skipsHiddenFiles) {
+            for entry in entries where entry.lastPathComponent != "MediaCache" {
+                let isDirectory=(try?entry.resourceValues(forKeys:[.isDirectoryKey]).isDirectory) ?? false
+                guard isDirectory, UUID(uuidString:entry.lastPathComponent) != nil, !activeFolders.contains(entry.standardizedFileURL.path) else { continue }
+                if (try?fm.removeItem(at:entry)) != nil { removed += 1 }
+            }
+        }
+        var referencedCache=Set<String>()
+        let expression="\\.\\./MediaCache/([A-Fa-f0-9]+\\.mp4)"
+        let regex=try?NSRegularExpression(pattern:expression)
+        for item in items {
+            guard let html=try?String(contentsOfFile:item.file,encoding:.utf8) else { continue }
+            for match in regex?.matches(in:html,range:NSRange(html.startIndex...,in:html)) ?? [] {
+                if let range=Range(match.range(at:1),in:html) { referencedCache.insert(String(html[range])) }
+            }
+        }
+        if let cacheFiles=try?fm.contentsOfDirectory(at:mediaCache,includingPropertiesForKeys:nil,options:.skipsHiddenFiles) {
+            for cache in cacheFiles where !referencedCache.contains(cache.lastPathComponent) {
+                if (try?fm.removeItem(at:cache)) != nil { removed += 1 }
+            }
+        }
+        return removed
+    }
+    func delete(_ o:IndexSet){for i in o{try?fm.removeItem(at:URL(fileURLWithPath:items[i].file).deletingLastPathComponent())};items.remove(atOffsets:o);persist();let removed=cleanupOrphanedLibrary();log("[程序] 已删除网页及对应资源。\(removed > 0 ? \"已额外清理 \\(removed) 项遗留资源。\" : \"\")")};func persist(){try?fm.createDirectory(at:root,withIntermediateDirectories:true);try?JSONEncoder().encode(items).write(to:root.appendingPathComponent("catalog.json"))}
 }
 struct Home:View{
     @EnvironmentObject var s:Store
