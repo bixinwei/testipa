@@ -82,6 +82,12 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
     func save(){Task{if !bookmarkRunning{bookmarkStopRequested=false};downloading=true;downloadStatus="正在准备保存网页…";defer{downloading=false;downloadStatus=""};_ = await work()}}
     var bookmarkCompleted: Int { bookmarkJobs.filter{$0.status == "done" || $0.status == "failed"}.count }
     func persistBookmarkQueue(){UserDefaults.standard.set(try?JSONEncoder().encode(bookmarkJobs),forKey:"wo.bookmark.queue")}
+    func deleteBookmarkJobs(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        bookmarkJobs.removeAll { ids.contains($0.id) }
+        persistBookmarkQueue()
+        log("[程序] 已删除 \(ids.count) 个书签任务。")
+    }
     func importBookmarks(_ file: URL) {
         guard let data=try?Data(contentsOf:file) else { log("[程序] 无法读取书签文件。"); return }
         let text=String(data:data,encoding:.utf8) ?? String(data:data,encoding:.utf16) ?? ""
@@ -345,7 +351,8 @@ struct WebSaveTab:View{
 struct BookmarkBatchTab:View{
     @EnvironmentObject var s:Store
     @State private var importingBookmarks=false
-    var body:some View{NavigationStack{List{
+    @State private var selectedJobs=Set<UUID>()
+    var body:some View{NavigationStack{List(selection:$selectedJobs){
         Section("书签批量保存"){
             TextEditor(text:$s.bookmarkDomains).frame(minHeight:72).textInputAutocapitalization(.never)
             Text("填写允许的域名；可用换行、逗号或分号分隔。导入 HTML 书签后，仅保存这些域名及其子域名的超链接。").font(.caption).foregroundStyle(.secondary)
@@ -360,14 +367,28 @@ struct BookmarkBatchTab:View{
                 }
             }
         }
+        Section("任务列表（\(s.bookmarkJobs.count)）"){
+            if s.bookmarkJobs.isEmpty { Text("导入书签后，这里会列出符合域名白名单的网页。").foregroundStyle(.secondary) }
+            else { ForEach(s.bookmarkJobs){job in NavigationLink(destination:BookmarkPreview(url:job.url)){VStack(alignment:.leading,spacing:4){Text(job.url).font(.subheadline).lineLimit(2);Text(job.status == "done" ? "已完成" : job.status == "failed" ? "失败，继续时会重试" : "待处理").font(.caption).foregroundStyle(job.status == "failed" ? .red : .secondary)}}} }
+        }
         if s.bookmarkRunning || !s.downloadStatus.isEmpty{Section("任务进度"){HStack{if s.bookmarkRunning{ProgressView()};Text(s.downloadStatus.isEmpty ? "正在处理书签任务…" : s.downloadStatus).font(.subheadline)}}}
         Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption).textSelection(.enabled)}}
-    }.navigationTitle("书签批量保存").fileImporter(isPresented:$importingBookmarks,allowedContentTypes:[.html,.plainText],allowsMultipleSelection:false){result in switch result {case .success(let files):guard let file=files.first else{return};let allowed=file.startAccessingSecurityScopedResource();defer{if allowed{file.stopAccessingSecurityScopedResource()}};s.importBookmarks(file);case .failure(let error):s.log("[程序] 导入书签失败：\(error.localizedDescription)")}}}
+    }.navigationTitle("书签批量保存").toolbar{ToolbarItem(placement:.topBarLeading){EditButton()};ToolbarItem(placement:.topBarTrailing){Button("删除选中"){s.deleteBookmarkJobs(selectedJobs);selectedJobs.removeAll()}.disabled(selectedJobs.isEmpty || s.bookmarkRunning)}}.fileImporter(isPresented:$importingBookmarks,allowedContentTypes:[.html,.plainText],allowsMultipleSelection:false){result in switch result {case .success(let files):guard let file=files.first else{return};let allowed=file.startAccessingSecurityScopedResource();defer{if allowed{file.stopAccessingSecurityScopedResource()}};s.importBookmarks(file);case .failure(let error):s.log("[程序] 导入书签失败：\(error.localizedDescription)")}}}
     }
 }
 struct DownloadedTab:View{
     @EnvironmentObject var s:Store
     var body:some View{NavigationStack{List{Section("已下载网页"){if s.items.isEmpty{Text("尚未保存网页").foregroundStyle(.secondary)}else{ForEach(s.items){item in NavigationLink(destination:OfflinePreview(item:item)){Text(item.title).foregroundStyle(.primary)}}.onDelete(perform:s.delete)}}}.navigationTitle("已下载")}}
+}
+struct BookmarkPreview: View {
+    let url: String
+    @StateObject private var browser = Browser()
+    var body: some View {
+        Web(browser: browser)
+            .navigationTitle("网页预览")
+            .navigationBarTitleDisplayMode(.inline)
+            .onAppear { browser.open(url) }
+    }
 }
 struct Web:UIViewRepresentable{@ObservedObject var browser:Browser;func makeUIView(context:Context)->WKWebView{browser.view};func updateUIView(_ v:WKWebView,context:Context){}}
 struct WebSheet: View {
