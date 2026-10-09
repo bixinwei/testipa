@@ -326,6 +326,7 @@ struct Home:View{
             WebSaveTab().tabItem{Label("网页保存",systemImage:"square.and.pencil")}
             BookmarkBatchTab().tabItem{Label("书签批量保存",systemImage:"book")}
             DownloadedTab().tabItem{Label("已下载",systemImage:"tray.full")}
+            ConfigurationTab().tabItem{Label("配置",systemImage:"gearshape")}
         }.sheet(isPresented:$s.browserShown){WebSheet(browser:s.browser)}
     }
 }
@@ -334,13 +335,6 @@ struct WebSaveTab:View{
     var body:some View{NavigationStack{List{
         Section("网页保存"){
             TextField("网页地址",text:$s.url).textInputAutocapitalization(.never)
-            SecureField("API Key",text:$s.key)
-            TextField("API 地址",text:$s.api).textInputAutocapitalization(.never)
-            TextField("模型",text:$s.model).textInputAutocapitalization(.never)
-            Button("刷新模型列表"){s.refreshModels()}
-            if !s.models.isEmpty{Picker("已获取模型",selection:$s.model){ForEach(s.models,id:\.self){Text($0).tag($0)}}}
-            Toggle("每次都 AI 识别",isOn:$s.force)
-            Button("保存配置"){s.saveConfig()}
             Button("打开验证浏览器"){s.open()}
             Button("保存主体网页"){s.save()}.disabled(s.downloading || s.bookmarkRunning)
         }
@@ -379,6 +373,20 @@ struct BookmarkBatchTab:View{
 struct DownloadedTab:View{
     @EnvironmentObject var s:Store
     var body:some View{NavigationStack{List{Section("已下载网页"){if s.items.isEmpty{Text("尚未保存网页").foregroundStyle(.secondary)}else{ForEach(s.items){item in NavigationLink(destination:OfflinePreview(item:item)){Text(item.title).foregroundStyle(.primary)}}.onDelete(perform:s.delete)}}}.navigationTitle("已下载")}}
+}
+struct ConfigurationTab: View {
+    @EnvironmentObject var s: Store
+    var body: some View { NavigationStack { List {
+        Section("大模型配置") {
+            SecureField("DeepSeek API Key", text: $s.key)
+            TextField("API URL", text: $s.api).textInputAutocapitalization(.never)
+            TextField("模型", text: $s.model).textInputAutocapitalization(.never)
+            Button("刷新模型列表") { s.refreshModels() }
+            if !s.models.isEmpty { Picker("选择模型", selection: $s.model) { ForEach(s.models,id:\.self) { Text($0).tag($0) } } }
+            Toggle("每次都 AI 识别", isOn: $s.force)
+            Button("保存配置") { s.saveConfig() }
+        }
+    }.navigationTitle("配置") } }
 }
 struct BookmarkPreview: View {
     let url: String
