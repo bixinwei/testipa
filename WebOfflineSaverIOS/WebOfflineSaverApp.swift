@@ -84,7 +84,12 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
     }
     func delete(_ o:IndexSet){for i in o{try?fm.removeItem(at:URL(fileURLWithPath:items[i].file).deletingLastPathComponent())};items.remove(atOffsets:o);persist()};func persist(){try?fm.createDirectory(at:root,withIntermediateDirectories:true);try?JSONEncoder().encode(items).write(to:root.appendingPathComponent("catalog.json"))}
 }
-struct Home:View{@EnvironmentObject var s:Store;var body:some View{NavigationStack{List{Section("网页保存"){TextField("网页地址",text:$s.url).textInputAutocapitalization(.never);SecureField("API Key",text:$s.key);TextField("API 地址",text:$s.api).textInputAutocapitalization(.never);TextField("模型",text:$s.model).textInputAutocapitalization(.never);Button("刷新模型列表"){s.refreshModels()};if !s.models.isEmpty{Picker("已获取模型",selection:$s.model){ForEach(s.models,id:\.self){Text($0).tag($0)}}};Toggle("每次都 AI 识别",isOn:$s.force);Button("保存配置"){s.saveConfig()};Button("打开验证浏览器"){s.open()};Button("保存主体网页"){s.save()}};Section("已下载"){ForEach(s.items){i in Link(i.title,destination:URL(fileURLWithPath:i.file))}.onDelete(perform:s.delete)};Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption)}}}.navigationTitle("网页离线保存器").sheet(isPresented:$s.browserShown){WebSheet(browser:s.browser)}}}}
+struct Home:View{
+    @EnvironmentObject var s:Store
+    @State private var selected: Item?
+    var body:some View{NavigationStack{List{Section("网页保存"){TextField("网页地址",text:$s.url).textInputAutocapitalization(.never);SecureField("API Key",text:$s.key);TextField("API 地址",text:$s.api).textInputAutocapitalization(.never);TextField("模型",text:$s.model).textInputAutocapitalization(.never);Button("刷新模型列表"){s.refreshModels()};if !s.models.isEmpty{Picker("已获取模型",selection:$s.model){ForEach(s.models,id:\.self){Text($0).tag($0)}}};Toggle("每次都 AI 识别",isOn:$s.force);Button("保存配置"){s.saveConfig()};Button("打开验证浏览器"){s.open()};Button("保存主体网页"){s.save()}};Section("已下载"){ForEach(s.items){i in Button{iSelected(i)}label:{Text(i.title).foregroundStyle(.primary)}}.onDelete(perform:s.delete)};Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption)}}}.navigationTitle("网页离线保存器").sheet(isPresented:$s.browserShown){WebSheet(browser:s.browser)}.navigationDestination(item:$selected){item in OfflinePreview(item:item)}}}
+    private func iSelected(_ item:Item){selected=item}
+}
 struct Web:UIViewRepresentable{@ObservedObject var browser:Browser;func makeUIView(context:Context)->WKWebView{browser.view};func updateUIView(_ v:WKWebView,context:Context){}}
 struct WebSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -101,4 +106,13 @@ struct WebSheet: View {
                 }
         }
     }
+}
+struct OfflinePreview: View {
+    let item: Item
+    var body: some View { LocalWebView(file: URL(fileURLWithPath: item.file)).navigationTitle(item.title).navigationBarTitleDisplayMode(.inline) }
+}
+struct LocalWebView: UIViewRepresentable {
+    let file: URL
+    func makeUIView(context: Context) -> WKWebView { let view=WKWebView(); view.loadFileURL(file, allowingReadAccessTo:file.deletingLastPathComponent()); return view }
+    func updateUIView(_ view: WKWebView, context: Context) {}
 }
