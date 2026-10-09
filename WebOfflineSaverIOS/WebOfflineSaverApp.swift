@@ -17,8 +17,11 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
     func js(_ s:String) async throws->Any {try await withCheckedThrowingContinuation{c in view.evaluateJavaScript(s){v,e in if let e{c.resume(throwing:e)}else{c.resume(returning:v as Any)}}}}
     func asyncJS(_ script:String) async throws -> Any {
         try await withCheckedThrowingContinuation { continuation in
-            view.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page) { value, error in
-                if let error { continuation.resume(throwing:error) } else { continuation.resume(returning:value as Any) }
+            view.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page) { result in
+                switch result {
+                case .success(let value): continuation.resume(returning:value as Any)
+                case .failure(let error): continuation.resume(throwing:error)
+                }
             }
         }
     }
