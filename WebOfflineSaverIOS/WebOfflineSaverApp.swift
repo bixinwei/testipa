@@ -10,10 +10,10 @@ struct AssetRef: Codable { let url: String; let kind: String }
 struct CapturedPage: Decodable { let title: String; let html: String; let resources: [AssetRef]; let selectedVideo: String?; let missingVideo: Bool? }
 
 @MainActor final class Browser: NSObject, ObservableObject, WKNavigationDelegate {
-    let view: WKWebView; var wait: CheckedContinuation<Void,Error>?
+    let view: WKWebView; var wait: CheckedContinuation<Void,Error>?; var completedURL: URL?
     override init(){let c=WKWebViewConfiguration();c.websiteDataStore = .default();c.defaultWebpagePreferences.allowsContentJavaScript=true;view=WKWebView(frame:.zero,configuration:c);super.init();view.navigationDelegate=self}
-    func open(_ s:String){if let u=URL(string:s){view.load(URLRequest(url:u))}}
-    func load(_ s:String) async throws {guard let u=URL(string:s)else{throw URLError(.badURL)};try await withCheckedThrowingContinuation{(c:CheckedContinuation<Void,Error>) in wait=c;view.load(URLRequest(url:u))}}
+    func open(_ s:String){if let u=URL(string:s){completedURL=nil;view.load(URLRequest(url:u))}}
+    func load(_ s:String) async throws {guard let u=URL(string:s)else{throw URLError(.badURL)};if let completedURL,completedURL.absoluteString == u.absoluteString{return};try await withCheckedThrowingContinuation{(c:CheckedContinuation<Void,Error>) in wait=c;view.load(URLRequest(url:u))}}
     func js(_ s:String) async throws->Any {try await withCheckedThrowingContinuation{c in view.evaluateJavaScript(s){v,e in if let e{c.resume(throwing:e)}else{c.resume(returning:v as Any)}}}}
     func asyncJS(_ script:String) async throws -> Any {
         try await withCheckedThrowingContinuation { continuation in
@@ -46,7 +46,7 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
         guard let raw=try await js(expression) as? String else { return [] }
         return (try? JSONDecoder().decode([String].self,from:Data(raw.utf8))) ?? []
     }
-    func webView(_ w:WKWebView,didFinish n:WKNavigation!){wait?.resume();wait=nil}; func webView(_ w:WKWebView,didFail n:WKNavigation!,withError e:Error){wait?.resume(throwing:e);wait=nil}; func webView(_ w:WKWebView,didFailProvisionalNavigation n:WKNavigation!,withError e:Error){wait?.resume(throwing:e);wait=nil}
+    func webView(_ w:WKWebView,didFinish n:WKNavigation!){completedURL=w.url;wait?.resume();wait=nil}; func webView(_ w:WKWebView,didFail n:WKNavigation!,withError e:Error){wait?.resume(throwing:e);wait=nil}; func webView(_ w:WKWebView,didFailProvisionalNavigation n:WKNavigation!,withError e:Error){wait?.resume(throwing:e);wait=nil}
 }
 
 @MainActor final class Store: ObservableObject {
@@ -164,12 +164,14 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
     }
     func work() async {
         guard !url.isEmpty, !key.isEmpty else { log("[程序] 请填写网页地址和 API Key。"); return }
+        var stage="初始化"
         do {
-            saveConfig(); log("[程序] 正在读取网页…"); try await browser.load(url)
+            saveConfig(); stage="读取已验证网页";log("[程序] 正在读取网页…"); try await browser.load(url)
+            stage="生成网页结构骨架"
             let skeleton = try await browser.js("(()=>[...document.querySelectorAll('main,article,section,div')].slice(0,500).map(x=>'<'+x.tagName.toLowerCase()+' id=\"'+(x.id||'')+'\" class=\"'+(x.className||'')+'\">').join('\\n'))()") as? String ?? ""
-            let host = URL(string:url)?.host ?? "site"; let p = try await getPlan(host:host, skeleton:skeleton)
+            let host = URL(string:url)?.host ?? "site"; stage="AI 主体结构识别";let p = try await getPlan(host:host, skeleton:skeleton)
             let q = String(data:try JSONEncoder().encode(p.contentSelector),encoding:.utf8)!; let ex = String(data:try JSONEncoder().encode(p.excludes),encoding:.utf8)!; let ti = String(data:try JSONEncoder().encode(p.titleSelector ?? ""),encoding:.utf8)!
-            log("[程序] 正在从已验证浏览器读取视频播放资源…")
+            stage="读取当前播放器资源";log("[程序] 正在从已验证浏览器读取视频播放资源…")
             let mediaJSON=String(data:try JSONEncoder().encode(try await browser.currentPageMediaURLs()),encoding:.utf8)!
             let baseline=mediaJSON
             let obsoleteScript = """
@@ -205,7 +207,7 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
               return JSON.stringify({title,html:root.outerHTML,resources,selectedVideo,missingVideo});
             })()
             """
-            guard let raw=try await browser.asyncJS(script) as? String else { throw URLError(.cannotParseResponse) }
+            stage="提取正文和已渲染图片";guard let raw=try await browser.asyncJS(script) as? String else { throw URLError(.cannotParseResponse) }
             let page = try JSONDecoder().decode(CapturedPage.self, from: Data(raw.utf8)); if page.missingVideo == true { throw NSError(domain:"WebOfflineSaver",code:2,userInfo:[NSLocalizedDescriptionKey:"未能从已验证页面取得实际视频资源；已取消保存，避免生成伪离线网页。"])}; if let selected=page.selectedVideo,!selected.isEmpty{log("[程序] 已锁定当前播放器视频地址：\(selected)")}; let id=UUID(), dir=root.appendingPathComponent(id.uuidString), assets=dir.appendingPathComponent("assets",isDirectory:true)
             try fm.createDirectory(at: assets, withIntermediateDirectories:true)
             var fragment = page.html; var saved=0; var videoOrdinal=0
@@ -222,7 +224,7 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
             let file=dir.appendingPathComponent("index.html")
             let pageHTML="<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><style>body{max-width:760px;margin:24px auto;padding:0 16px;font:17px/1.7 -apple-system}img,video{max-width:100%;height:auto}video{display:block;margin:14px auto}</style>\(fragment)"
             try pageHTML.write(to:file,atomically:true,encoding:.utf8); let item=Item(id:id,title:page.title.isEmpty ? host : page.title,url:url,file:file.path);items.insert(item,at:0);persist();log("[阶段] 已保存《\(item.title)》；已离线保存 \(saved) 个资源。")
-        } catch { log("[程序] 保存失败：\(error.localizedDescription)") }
+        } catch { log("[程序] 保存失败（\(stage)）：\(error.localizedDescription)") }
     }
     func delete(_ o:IndexSet){for i in o{try?fm.removeItem(at:URL(fileURLWithPath:items[i].file).deletingLastPathComponent())};items.remove(atOffsets:o);persist()};func persist(){try?fm.createDirectory(at:root,withIntermediateDirectories:true);try?JSONEncoder().encode(items).write(to:root.appendingPathComponent("catalog.json"))}
 }
