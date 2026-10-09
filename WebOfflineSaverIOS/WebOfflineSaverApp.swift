@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import CryptoKit
 
 @main struct WebOfflineSaverApp: App { @StateObject var store = Store(); var body: some Scene { WindowGroup { Home().environmentObject(store) } } }
 struct Plan: Codable { let contentSelector: String; let titleSelector: String?; let excludes: [String] }
@@ -50,6 +51,7 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
     @Published var models:[String]=[]
     let browser=Browser(); let fm=FileManager.default
     var root:URL{fm.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("OfflineLibrary",isDirectory:true)}
+    var mediaCache:URL{root.appendingPathComponent("MediaCache",isDirectory:true)}
     init(){if let d=try?Data(contentsOf:root.appendingPathComponent("catalog.json")){items=(try?JSONDecoder().decode([Item].self,from:d)) ?? []}}
     func log(_ x:String){logs.append(x);if logs.count>150{logs.removeFirst()}}
     func saveConfig(){UserDefaults.standard.set(url,forKey:"wo.url");UserDefaults.standard.set(key,forKey:"wo.key");UserDefaults.standard.set(api,forKey:"wo.api");UserDefaults.standard.set(model,forKey:"wo.model");UserDefaults.standard.set(force,forKey:"wo.force");log("[程序] 配置已保存。")}
@@ -111,6 +113,27 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
             }
         }
     }
+    func videoCacheFile(pageURL:String, ordinal:Int) -> URL {
+        let key="\(pageURL)#video-\(ordinal)"
+        let hash=SHA256.hash(data:Data(key.utf8)).map{String(format:"%02x",$0)}.joined()
+        return mediaCache.appendingPathComponent("\(hash).mp4")
+    }
+    func cachedVideo(pageURL:String, ordinal:Int) -> URL? {
+        let cache=videoCacheFile(pageURL:pageURL,ordinal:ordinal)
+        if fm.fileExists(atPath:cache.path){ return cache }
+        guard let existing=items.first(where:{$0.url == pageURL}),let html=try?String(contentsOfFile:existing.file,encoding:.utf8) else{return nil}
+        let pattern="<video[^>]+src=[\\\"']([^\\\"']+)"
+        guard let regex=try?NSRegularExpression(pattern:pattern),let match=regex.matches(in:html,range:NSRange(html.startIndex...,in:html)).dropFirst(ordinal - 1).first,let range=Range(match.range(at:1),in:html) else{return nil}
+        let value=String(html[range]); guard !value.hasPrefix("http"),!value.hasPrefix("../") else{return nil}
+        let source=URL(fileURLWithPath:existing.file).deletingLastPathComponent().appendingPathComponent(value)
+        guard fm.fileExists(atPath:source.path) else{return nil}
+        do{try fm.createDirectory(at:mediaCache,withIntermediateDirectories:true);try fm.copyItem(at:source,to:cache);log("[程序] 已复用此前保存的视频，无需重复下载。");return cache}catch{return nil}
+    }
+    func cacheVideo(local:String, folder:URL, pageURL:String, ordinal:Int) -> String? {
+        let source=folder.appendingPathComponent(local);let cache=videoCacheFile(pageURL:pageURL,ordinal:ordinal)
+        guard fm.fileExists(atPath:source.path) else{return nil}
+        do{try fm.createDirectory(at:mediaCache,withIntermediateDirectories:true);if !fm.fileExists(atPath:cache.path){try fm.copyItem(at:source,to:cache)};try?fm.removeItem(at:source);return "../MediaCache/\(cache.lastPathComponent)"}catch{return nil}
+    }
     func work() async {
         guard !url.isEmpty, !key.isEmpty else { log("[程序] 请填写网页地址和 API Key。"); return }
         do {
@@ -155,12 +178,13 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
             guard let raw=try await browser.js(script) as? String else { throw URLError(.cannotParseResponse) }
             let page = try JSONDecoder().decode(CapturedPage.self, from: Data(raw.utf8)); if page.missingVideo == true { throw NSError(domain:"WebOfflineSaver",code:2,userInfo:[NSLocalizedDescriptionKey:"未能从已验证页面取得实际视频资源；已取消保存，避免生成伪离线网页。"])}; if let selected=page.selectedVideo,!selected.isEmpty{log("[程序] 已锁定当前播放器视频地址：\(selected)")}; let id=UUID(), dir=root.appendingPathComponent(id.uuidString), assets=dir.appendingPathComponent("assets",isDirectory:true)
             try fm.createDirectory(at: assets, withIntermediateDirectories:true)
-            var fragment = page.html; var saved=0
+            var fragment = page.html; var saved=0; var videoOrdinal=0
             for (index, asset) in page.resources.enumerated() {
                 let source=asset.url; let isHLS=source.lowercased().contains(".m3u8")
                 let isVideo=asset.kind == "video"
-                if isVideo { log("[程序] 视频资源地址：\(source)") }
-                let local=isHLS ? await localHLS(source,assets:assets,number:index + 1) : await localAsset(source, assets:assets, number:index + 1, imageOnly:asset.kind == "image")
+                if isVideo { videoOrdinal += 1; if let cache=cachedVideo(pageURL:url,ordinal:videoOrdinal){fragment=fragment.replacingOccurrences(of:source,with:"../MediaCache/\(cache.lastPathComponent)");saved += 1;continue};log("[程序] 视频资源地址：\(source)") }
+                let downloaded=isHLS ? await localHLS(source,assets:assets,number:index + 1) : await localAsset(source, assets:assets, number:index + 1, imageOnly:asset.kind == "image")
+                let local=isVideo ? downloaded.flatMap{cacheVideo(local:$0,folder:dir,pageURL:url,ordinal:videoOrdinal)} : downloaded
                 if let local { fragment = fragment.replacingOccurrences(of: source, with: local); saved += 1 }
                 else if isVideo { throw NSError(domain:"WebOfflineSaver",code:1,userInfo:[NSLocalizedDescriptionKey:"视频资源未能下载，已取消保存以避免生成伪离线网页。"]) }
             }
@@ -198,6 +222,6 @@ struct OfflinePreview: View {
 }
 struct LocalWebView: UIViewRepresentable {
     let file: URL
-    func makeUIView(context: Context) -> WKWebView { let view=WKWebView(); view.loadFileURL(file, allowingReadAccessTo:file.deletingLastPathComponent()); return view }
+    func makeUIView(context: Context) -> WKWebView { let view=WKWebView(); view.loadFileURL(file, allowingReadAccessTo:file.deletingLastPathComponent().deletingLastPathComponent()); return view }
     func updateUIView(_ view: WKWebView, context: Context) {}
 }
