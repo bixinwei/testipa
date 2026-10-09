@@ -86,4 +86,19 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
 }
 struct Home:View{@EnvironmentObject var s:Store;var body:some View{NavigationStack{List{Section("网页保存"){TextField("网页地址",text:$s.url).textInputAutocapitalization(.never);SecureField("API Key",text:$s.key);TextField("API 地址",text:$s.api).textInputAutocapitalization(.never);TextField("模型",text:$s.model).textInputAutocapitalization(.never);Button("刷新模型列表"){s.refreshModels()};if !s.models.isEmpty{Picker("已获取模型",selection:$s.model){ForEach(s.models,id:\.self){Text($0).tag($0)}}};Toggle("每次都 AI 识别",isOn:$s.force);Button("保存配置"){s.saveConfig()};Button("打开验证浏览器"){s.open()};Button("保存主体网页"){s.save()}};Section("已下载"){ForEach(s.items){i in Link(i.title,destination:URL(fileURLWithPath:i.file))}.onDelete(perform:s.delete)};Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption)}}}.navigationTitle("网页离线保存器").sheet(isPresented:$s.browserShown){WebSheet(browser:s.browser)}}}}
 struct Web:UIViewRepresentable{@ObservedObject var browser:Browser;func makeUIView(context:Context)->WKWebView{browser.view};func updateUIView(_ v:WKWebView,context:Context){}}
-struct WebSheet:View{@Environment(\.dismiss) private var dismiss;let browser:Browser;var body:some View{NavigationStack{Web(browser:browser).navigationTitle("完成验证后返回").navigationBarTitleDisplayMode(.inline).toolbar{ToolbarItem(placement:.confirmationAction){Button("完成验证"){dismiss()}}}}}
+struct WebSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let browser: Browser
+    var body: some View {
+        NavigationStack {
+            Web(browser: browser)
+                .navigationTitle("完成验证后返回")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("完成验证") { dismiss() }
+                    }
+                }
+        }
+    }
+}
