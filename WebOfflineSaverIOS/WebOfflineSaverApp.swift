@@ -5,7 +5,8 @@ import WebKit
 struct Plan: Codable { let contentSelector: String; let titleSelector: String?; let excludes: [String] }
 struct CachedPlan: Codable { let version: Int; let plan: Plan }
 struct Item: Codable, Identifiable, Hashable { let id: UUID; let title, url, file: String }
-struct CapturedPage: Decodable { let title: String; let html: String; let resources: [String]; let selectedVideo: String?; let missingVideo: Bool? }
+struct AssetRef: Codable { let url: String; let kind: String }
+struct CapturedPage: Decodable { let title: String; let html: String; let resources: [AssetRef]; let selectedVideo: String?; let missingVideo: Bool? }
 
 @MainActor final class Browser: NSObject, ObservableObject, WKNavigationDelegate {
     let view: WKWebView; var wait: CheckedContinuation<Void,Error>?
@@ -67,7 +68,11 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
         } catch { log("[程序] 刷新模型列表失败：\(error.localizedDescription)") }
     }
     func getPlan(host:String,skeleton:String) async throws->Plan {let k="wo.plan.\(host)";if !force,let d=UserDefaults.standard.data(forKey:k),let cached=try?JSONDecoder().decode(CachedPlan.self,from:d),cached.version == 2 {log("[程序] 复用 \(host) 已保存的网页结构，不调用 AI。");return cached.plan};log("[AI] 正在识别标题与主体区域…");let prompt="分析网页结构，不要输出正文。返回 JSON：contentSelector（标题 CSS selector 不在此；只包住正文/图片/视频的最小 CSS selector）、titleSelector（标题 CSS selector）、excludes（需从主体内删除的 CSS selector 数组）。必须排除广告、推广按钮、菜单、分享控件、上一篇下一篇、标签、下载推广、相关推荐、评论、侧栏和页脚。不要用一个包含这些区域的大容器代替排除规则。URL=\(url)\n结构：\(skeleton)";var r=URLRequest(url:URL(string:api.trimmingCharacters(in:CharacterSet(charactersIn:"/"))+"/chat/completions")!);r.httpMethod="POST";r.setValue("Bearer \(key)",forHTTPHeaderField:"Authorization");r.setValue("application/json",forHTTPHeaderField:"Content-Type");r.httpBody=try JSONSerialization.data(withJSONObject:["model":model,"temperature":0.1,"response_format":["type":"json_object"],"messages":[["role":"user","content":prompt]]]);let(d,_)=try await URLSession.shared.data(for:r);let o=try JSONSerialization.jsonObject(with:d)as![String:Any];let s=(((o["choices"]as?[[String:Any]])?.first?["message"]as?[String:Any])?["content"]as?String) ?? "{}";let p=try JSONDecoder().decode(Plan.self,from:Data(s.utf8));UserDefaults.standard.set(try JSONEncoder().encode(CachedPlan(version:2,plan:p)),forKey:k);return p}
-    func localAsset(_ source: String, assets: URL, number: Int) async -> String? {
+    func validImage(_ data: Data) -> Bool {
+        let bytes=[UInt8](data.prefix(16))
+        return bytes.starts(with:[0xFF,0xD8,0xFF]) || bytes.starts(with:[0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A]) || bytes.starts(with:[0x47,0x49,0x46,0x38]) || (bytes.count >= 12 && Array(bytes[0..<4]) == [0x52,0x49,0x46,0x46] && Array(bytes[8..<12]) == [0x57,0x45,0x42,0x50]) || (bytes.count >= 12 && String(bytes:bytes[4..<12],encoding:.ascii)?.contains("ftypavif") == true)
+    }
+    func localAsset(_ source: String, assets: URL, number: Int, imageOnly: Bool=false) async -> String? {
         if source.lowercased().hasPrefix("data:image/") {
             let parts=source.split(separator:",",maxSplits:1).map(String.init)
             guard parts.count == 2, let data=Data(base64Encoded:parts[1]) else { return nil }
@@ -83,7 +88,9 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
             let pathExt = remote.pathExtension.lowercased()
             let ext: String = mime.contains("png") ? "png" : mime.contains("jpeg") || mime.contains("jpg") ? "jpg" : mime.contains("gif") ? "gif" : mime.contains("webp") ? "webp" : mime.contains("mp4") ? "mp4" : pathExt.isEmpty ? "bin" : pathExt
             let name = String(format: "%03d.%@", number, ext)
+            guard !imageOnly || validImage(data) else { log("[程序] 图片原文件不是有效图片，未将防盗链响应写入离线库：\(source)"); return nil }
             try data.write(to: assets.appendingPathComponent(name), options: .atomic)
+            if imageOnly { log("[程序] 图片已保存：\(source)") }
             return "assets/\(name)"
         } catch { log("[程序] 资源下载失败：\(source)（\(error.localizedDescription)）"); return nil }
     }
@@ -140,7 +147,7 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
               [...root.querySelectorAll('p')].filter(el=>!(el.innerText||'').trim()&&!el.querySelector('img,video,figure')).forEach(el=>el.remove());
               root.querySelectorAll('img,video,source').forEach(el=>{const source=el.getAttribute('data-xkrkllgl')||el.getAttribute('data-original')||el.getAttribute('data-lazy-src')||el.getAttribute('data-src')||el.getAttribute('src');if(source)el.setAttribute('src',absolute(source));if(el.tagName==='VIDEO'){el.controls=true;el.preload='metadata'}['srcset','data-src','data-original','data-lazy-src','data-xkrkllgl','onload','onclick','style','autoplay'].forEach(a=>el.removeAttribute(a))});
               root.querySelectorAll('a[href]').forEach(a=>{a.href=absolute(a.getAttribute('href'));a.target='_blank';a.rel='noopener'});
-              const resources=[...new Set([...root.querySelectorAll('img,video,source')].map(el=>el.getAttribute('src')).filter(Boolean))];
+              const resources=[...new Map([...root.querySelectorAll('img')].map(el=>[el.getAttribute('src'),{url:el.getAttribute('src'),kind:'image'}]).concat([...root.querySelectorAll('video,source')].map(el=>[el.getAttribute('src'),{url:el.getAttribute('src'),kind:'video'}])).filter(([url])=>Boolean(url))).values()];
               const titleSelector=\(ti), title=(titleSelector&&document.querySelector(titleSelector)?.innerText||root.querySelector('h1')?.innerText||document.querySelector('h1.entry-title,h1.post-title,.entry-title,.post-title')?.innerText||document.querySelector('meta[property="og:title"],meta[name="twitter:title"]')?.getAttribute('content')||document.title).trim();
               return JSON.stringify({title,html:root.outerHTML,resources,selectedVideo,missingVideo});
             })()
@@ -149,11 +156,11 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
             let page = try JSONDecoder().decode(CapturedPage.self, from: Data(raw.utf8)); if page.missingVideo == true { throw NSError(domain:"WebOfflineSaver",code:2,userInfo:[NSLocalizedDescriptionKey:"未能从已验证页面取得实际视频资源；已取消保存，避免生成伪离线网页。"])}; if let selected=page.selectedVideo,!selected.isEmpty{log("[程序] 已锁定当前播放器视频地址：\(selected)")}; let id=UUID(), dir=root.appendingPathComponent(id.uuidString), assets=dir.appendingPathComponent("assets",isDirectory:true)
             try fm.createDirectory(at: assets, withIntermediateDirectories:true)
             var fragment = page.html; var saved=0
-            for (index, source) in page.resources.enumerated() {
-                let isHLS=source.lowercased().contains(".m3u8")
-                let isVideo=isHLS || source.lowercased().contains(".mp4")
+            for (index, asset) in page.resources.enumerated() {
+                let source=asset.url; let isHLS=source.lowercased().contains(".m3u8")
+                let isVideo=asset.kind == "video"
                 if isVideo { log("[程序] 视频资源地址：\(source)") }
-                let local=isHLS ? await localHLS(source,assets:assets,number:index + 1) : await localAsset(source, assets:assets, number:index + 1)
+                let local=isHLS ? await localHLS(source,assets:assets,number:index + 1) : await localAsset(source, assets:assets, number:index + 1, imageOnly:asset.kind == "image")
                 if let local { fragment = fragment.replacingOccurrences(of: source, with: local); saved += 1 }
                 else if isVideo { throw NSError(domain:"WebOfflineSaver",code:1,userInfo:[NSLocalizedDescriptionKey:"视频资源未能下载，已取消保存以避免生成伪离线网页。"]) }
             }
