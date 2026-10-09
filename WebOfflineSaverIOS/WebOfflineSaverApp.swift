@@ -75,6 +75,10 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
     func log(_ x:String){logs.append(x);if logs.count>150{logs.removeFirst()}}
     func saveConfig(){UserDefaults.standard.set(url,forKey:"wo.url");UserDefaults.standard.set(key,forKey:"wo.key");UserDefaults.standard.set(api,forKey:"wo.api");UserDefaults.standard.set(model,forKey:"wo.model");UserDefaults.standard.set(force,forKey:"wo.force");UserDefaults.standard.set(bookmarkDomains,forKey:"wo.bookmark.domains");log("[程序] 配置已保存。")}
     func open(){saveConfig();browser.open(url);browserShown=true;log("[程序] 已打开验证浏览器，请完成验证。")}
+    func openBookmarkVerification(){
+        guard let job=bookmarkJobs.first(where:{$0.status == "pending"}) ?? bookmarkJobs.first else { log("[程序] 请先导入并匹配书签任务。"); return }
+        url=job.url; open()
+    }
     func save(){Task{if !bookmarkRunning{bookmarkStopRequested=false};downloading=true;downloadStatus="正在准备保存网页…";defer{downloading=false;downloadStatus=""};_ = await work()}}
     var bookmarkCompleted: Int { bookmarkJobs.filter{$0.status == "done" || $0.status == "failed"}.count }
     func persistBookmarkQueue(){UserDefaults.standard.set(try?JSONEncoder().encode(bookmarkJobs),forKey:"wo.bookmark.queue")}
@@ -329,6 +333,7 @@ struct Home:View{
             TextEditor(text:$s.bookmarkDomains).frame(minHeight:72).textInputAutocapitalization(.never)
             Text("填写允许的域名；可用换行、逗号或分号分隔。导入 HTML 书签后，仅保存这些域名及其子域名的超链接。").font(.caption).foregroundStyle(.secondary)
             Button("导入 HTML 书签"){importingBookmarks=true}.disabled(s.bookmarkRunning)
+            Button("打开验证浏览器"){s.openBookmarkVerification()}.disabled(s.bookmarkRunning || s.bookmarkJobs.isEmpty)
             if !s.bookmarkJobs.isEmpty {
                 ProgressView(value:Double(s.bookmarkCompleted),total:Double(s.bookmarkJobs.count))
                 Text("任务总数：\(s.bookmarkJobs.count)　已处理：\(s.bookmarkCompleted)　当前：\(s.bookmarkRunning ? s.bookmarkCurrent : 0)").font(.subheadline)
