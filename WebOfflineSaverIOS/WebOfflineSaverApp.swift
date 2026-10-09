@@ -7,7 +7,7 @@ struct Item: Codable, Identifiable { let id: UUID; let title, url, file: String 
 
 @MainActor final class Browser: NSObject, ObservableObject, WKNavigationDelegate {
     let view: WKWebView; var wait: CheckedContinuation<Void,Error>?
-    override init(){let c=WKWebViewConfiguration();c.websiteDataStore = .default;c.defaultWebpagePreferences.allowsContentJavaScript=true;view=WKWebView(frame:.zero,configuration:c);super.init();view.navigationDelegate=self}
+    override init(){let c=WKWebViewConfiguration();c.websiteDataStore = .default();c.defaultWebpagePreferences.allowsContentJavaScript=true;view=WKWebView(frame:.zero,configuration:c);super.init();view.navigationDelegate=self}
     func open(_ s:String){if let u=URL(string:s){view.load(URLRequest(url:u))}}
     func load(_ s:String) async throws {guard let u=URL(string:s)else{throw URLError(.badURL)};try await withCheckedThrowingContinuation{(c:CheckedContinuation<Void,Error>) in wait=c;view.load(URLRequest(url:u))}}
     func js(_ s:String) async throws->Any {try await withCheckedThrowingContinuation{c in view.evaluateJavaScript(s){v,e in if let e{c.resume(throwing:e)}else{c.resume(returning:v as Any)}}}}
@@ -19,7 +19,10 @@ struct Item: Codable, Identifiable { let id: UUID; let title, url, file: String 
     @Published var key=UserDefaults.standard.string(forKey:"wo.key") ?? ""
     @Published var api=UserDefaults.standard.string(forKey:"wo.api") ?? "https://api.deepseek.com/v1"
     @Published var model=UserDefaults.standard.string(forKey:"wo.model") ?? "deepseek-chat"
-    @Published var force=UserDefaults.standard.bool(forKey:"wo.force"), browserShown=false, logs:[String]=[], items:[Item]=[]
+    @Published var force=UserDefaults.standard.bool(forKey:"wo.force")
+    @Published var browserShown = false
+    @Published var logs:[String]=[]
+    @Published var items:[Item]=[]
     let browser=Browser(); let fm=FileManager.default
     var root:URL{fm.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("OfflineLibrary",isDirectory:true)}
     init(){if let d=try?Data(contentsOf:root.appendingPathComponent("catalog.json")){items=(try?JSONDecoder().decode([Item].self,from:d)) ?? []}}
