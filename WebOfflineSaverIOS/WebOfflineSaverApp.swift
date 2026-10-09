@@ -3,7 +3,7 @@ import WebKit
 
 @main struct WebOfflineSaverApp: App { @StateObject var store = Store(); var body: some Scene { WindowGroup { Home().environmentObject(store) } } }
 struct Plan: Codable { let contentSelector: String; let titleSelector: String?; let excludes: [String] }
-struct Item: Codable, Identifiable { let id: UUID; let title, url, file: String }
+struct Item: Codable, Identifiable, Hashable { let id: UUID; let title, url, file: String }
 struct CapturedPage: Decodable { let title: String; let html: String; let resources: [String] }
 
 @MainActor final class Browser: NSObject, ObservableObject, WKNavigationDelegate {
