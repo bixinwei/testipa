@@ -363,6 +363,7 @@ struct BookmarkBatchTab:View{
         if s.bookmarkRunning || !s.downloadStatus.isEmpty{Section("任务进度"){HStack{if s.bookmarkRunning{ProgressView()};Text(s.downloadStatus.isEmpty ? "正在处理书签任务…" : s.downloadStatus).font(.subheadline)}}}
         Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption).textSelection(.enabled)}}
     }.navigationTitle("书签批量保存").fileImporter(isPresented:$importingBookmarks,allowedContentTypes:[.html,.plainText],allowsMultipleSelection:false){result in switch result {case .success(let files):guard let file=files.first else{return};let allowed=file.startAccessingSecurityScopedResource();defer{if allowed{file.stopAccessingSecurityScopedResource()}};s.importBookmarks(file);case .failure(let error):s.log("[程序] 导入书签失败：\(error.localizedDescription)")}}}
+    }
 }
 struct DownloadedTab:View{
     @EnvironmentObject var s:Store
