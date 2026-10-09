@@ -192,8 +192,10 @@ final class DownloadModel: ObservableObject {
     @Published var baseURL = "https://api.deepseek.com/v1"
     @Published var model = "deepseek-chat"
     @Published var status = "先打开验证浏览器，完成网站验证后再开始下载。"
+    @Published var logs: [String] = []
     @Published var progress = 0.0
     @Published var isDownloading = false
+    @Published var isPaused = false
     @Published var showingBrowser = false
     @Published var exportedFile: URL?
     let browser = BrowserSession()
@@ -212,8 +214,28 @@ final class DownloadModel: ObservableObject {
         UserDefaults.standard.set(model, forKey: "novel.model")
     }
 
+    func saveConfiguration() {
+        saveSettings()
+        report("[程序] 配置已保存到本机。")
+    }
+
+    func togglePause() {
+        guard isDownloading else { return }
+        isPaused.toggle()
+        report(isPaused ? "[阶段] 已请求暂停：当前章节完成后暂停。" : "[阶段] 已恢复下载。")
+    }
+
+    private func report(_ message: String) {
+        status = message
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        logs.append("[\(formatter.string(from: Date()))] \(message)")
+        if logs.count > 300 { logs.removeFirst(logs.count - 300) }
+    }
+
     func openBrowser() {
-        saveSettings(); browser.openForVerification(url); showingBrowser = true
+        saveSettings(); report("[程序] 已打开验证浏览器，请手动完成网站验证。")
+        browser.openForVerification(url); showingBrowser = true
     }
 
     func download() {
@@ -221,13 +243,13 @@ final class DownloadModel: ObservableObject {
     }
 
     private func performDownload() async {
-        guard !apiKey.isEmpty else { status = "请先填写 DeepSeek API Key。"; return }
-        saveSettings(); isDownloading = true; progress = 0
-        defer { isDownloading = false }
+        guard !apiKey.isEmpty else { report("[程序] 请先填写 DeepSeek API Key。"); return }
+        saveSettings(); isDownloading = true; isPaused = false; progress = 0
+        defer { isDownloading = false; isPaused = false }
         do {
-            status = "[程序] 正在读取目录与分页导航…"
+            report("[程序] 正在读取目录与分页导航…")
             let pages = try await collectDirectoryPages()
-            status = "[AI] 正在确认目录页数与章节规则…"
+            report("[AI] 正在确认目录页数与章节规则…")
             let analysis = try await DeepSeekClient(apiKey: apiKey, baseURL: baseURL, model: model).analyze(indexURL: url, pages: pages)
             guard analysis.directoryPageCount == pages.count else {
                 throw DownloadError.invalidResponse("AI 返回的目录页数与实际导航不一致，已取消下载以避免漏章。")
@@ -239,7 +261,10 @@ final class DownloadModel: ObservableObject {
             guard !chapters.isEmpty else { throw DownloadError.noChapters }
             var output = ""
             for (index, chapter) in chapters.enumerated() {
-                status = "[程序] [\(index + 1)/\(chapters.count)] 下载《\(chapter.title)》…"
+                while isPaused {
+                    try await Task.sleep(for: .milliseconds(250))
+                }
+                report("[程序] [\(index + 1)/\(chapters.count)] 下载《\(chapter.title)》…")
                 _ = try await browser.fetchHTML(chapter.url)
                 let text = try await browser.text(using: analysis.contentSelector)
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
@@ -250,9 +275,9 @@ final class DownloadModel: ObservableObject {
             let outputURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("\(safe).txt")
             try output.write(to: outputURL, atomically: true, encoding: .utf8)
             exportedFile = outputURL
-            status = "[阶段] 下载完成：共 \(chapters.count) 章，可导出 TXT。"
+            report("[阶段] 下载完成：共 \(chapters.count) 章，可导出 TXT。")
         } catch {
-            status = "下载失败：\(error.localizedDescription)"
+            report("[程序] 下载失败：\(error.localizedDescription)")
         }
     }
 
@@ -288,6 +313,7 @@ struct ContentView: View {
                     SecureField("DeepSeek API Key", text: $model.apiKey)
                     TextField("API 地址", text: $model.baseURL).textInputAutocapitalization(.never).keyboardType(.URL)
                     TextField("模型", text: $model.model).textInputAutocapitalization(.never)
+                    Button("保存配置") { model.saveConfiguration() }
                 }
                 Section("网站验证") {
                     Button("打开验证浏览器") { model.openBrowser() }
@@ -295,13 +321,36 @@ struct ContentView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("下载") {
-                    Button(model.isDownloading ? "正在下载…" : "开始下载") { model.download() }
-                        .disabled(model.isDownloading || model.url.isEmpty || model.apiKey.isEmpty)
+                    HStack {
+                        Button(model.isDownloading ? "正在下载…" : "开始下载") { model.download() }
+                            .disabled(model.isDownloading || model.url.isEmpty || model.apiKey.isEmpty)
+                        if model.isDownloading {
+                            Spacer()
+                            Button(model.isPaused ? "继续下载" : "暂停下载") { model.togglePause() }
+                        }
+                    }
                     if model.isDownloading { ProgressView(value: model.progress) }
                     Text(model.status).font(.footnote).textSelection(.enabled)
                     if let file = model.exportedFile {
                         Button("导出 TXT") { showingShare = true }
                             .sheet(isPresented: $showingShare) { ShareSheet(items: [file]) }
+                    }
+                }
+                Section("运行日志") {
+                    if model.logs.isEmpty {
+                        Text("暂时没有日志。").font(.footnote).foregroundStyle(.secondary)
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 6) {
+                                ForEach(Array(model.logs.enumerated()), id: \.offset) { _, entry in
+                                    Text(entry)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .textSelection(.enabled)
+                                }
+                            }
+                        }
+                        .frame(minHeight: 130, maxHeight: 210)
                     }
                 }
             }
