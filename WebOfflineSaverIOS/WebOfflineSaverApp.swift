@@ -68,7 +68,7 @@ struct CapturedPage: Decodable { let title: String; let html: String; let resour
     func log(_ x:String){logs.append(x);if logs.count>150{logs.removeFirst()}}
     func saveConfig(){UserDefaults.standard.set(url,forKey:"wo.url");UserDefaults.standard.set(key,forKey:"wo.key");UserDefaults.standard.set(api,forKey:"wo.api");UserDefaults.standard.set(model,forKey:"wo.model");UserDefaults.standard.set(force,forKey:"wo.force");log("[程序] 配置已保存。")}
     func open(){saveConfig();browser.open(url);browserShown=true;log("[程序] 已打开验证浏览器，请完成验证。")}
-    func save(){Task{downloading=true;downloadStatus="正在准备保存网页…";defer{downloading=false};await work()}}
+    func save(){Task{downloading=true;downloadStatus="正在准备保存网页…";defer{downloading=false;downloadStatus=""};await work()}}
     func refreshModels(){Task{await loadModels()}}
     func loadModels() async {
         guard !key.isEmpty, let endpoint = URL(string:api.trimmingCharacters(in:CharacterSet(charactersIn:"/"))+"/models") else { log("[程序] 请先填写 API 地址和 API Key。"); return }
