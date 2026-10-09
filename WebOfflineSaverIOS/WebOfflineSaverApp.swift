@@ -9,7 +9,15 @@ struct CachedPlan: Codable { let version: Int; let plan: Plan }
 struct Item: Codable, Identifiable, Hashable { let id: UUID; let title, url, file: String }
 struct AssetRef: Codable { let url: String; let kind: String }
 struct CapturedPage: Decodable { let title: String; let html: String; let resources: [AssetRef]; let selectedVideo: String?; let missingVideo: Bool? }
-struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var status: String }
+struct BookmarkJob: Codable, Identifiable {
+    let id: UUID
+    let url: String
+    var status: String
+    var videoSources: [String]?
+    var downloadedVideoSources: [String]?
+    var itemID: UUID?
+}
+struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
 
 @MainActor final class Browser: NSObject, ObservableObject, WKNavigationDelegate {
     let view: WKWebView; var wait: CheckedContinuation<Void,Error>?; var completedURL: URL?
@@ -67,6 +75,7 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
     @Published var bookmarkJobs:[BookmarkJob]=[]
     @Published var bookmarkRunning=false
     @Published var bookmarkCurrent=0
+    @Published var videoDownloadRunning=false
     private var bookmarkStopRequested=false
     let browser=Browser(); let fm=FileManager.default
     var root:URL{fm.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("OfflineLibrary",isDirectory:true)}
@@ -96,7 +105,7 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
         guard let expression=try?NSRegularExpression(pattern:"(?i)href\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]") else { return }
         let links=expression.matches(in:text,range:NSRange(text.startIndex...,in:text)).compactMap{match -> String? in guard let range=Range(match.range(at:1),in:text),let address=URL(string:String(text[range])),let host=address.host?.lowercased(),["http","https"].contains(address.scheme?.lowercased() ?? "") else{return nil};return domains.contains(where:{host == $0 || host.hasSuffix("."+$0)}) ? address.absoluteString : nil}
         let known=Set(bookmarkJobs.map{$0.url}).union(Set(items.map{$0.url})); let unique=Array(Set(links)).filter{!known.contains($0)}.sorted()
-        bookmarkJobs += unique.map{BookmarkJob(id:UUID(),url:$0,status:"pending")}; persistBookmarkQueue(); log("[程序] 书签共匹配到 \(links.count) 个网页，已加入 \(unique.count) 个未重复任务。")
+        bookmarkJobs += unique.map{BookmarkJob(id:UUID(),url:$0,status:"pending",videoSources:[],downloadedVideoSources:[],itemID:nil)}; persistBookmarkQueue(); log("[程序] 书签共匹配到 \(links.count) 个网页，已加入 \(unique.count) 个未重复任务。")
     }
     func startBookmarkQueue() {
         guard !bookmarkRunning else{return}; guard !bookmarkJobs.isEmpty else{log("[程序] 暂无书签任务。");return}
@@ -109,10 +118,12 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
         while let index=bookmarkJobs.indices.first(where:{bookmarkJobs[$0].status == "pending"}) {
             if bookmarkStopRequested || Task.isCancelled { break }
             bookmarkCurrent=bookmarkCompleted + 1; url=bookmarkJobs[index].url; downloadStatus="正在准备保存网页…"; saveConfig();log("[程序] 正在处理书签任务 \(bookmarkCurrent)/\(bookmarkJobs.count)：\(url)")
-            let succeeded=await work()
+            let outcome=await work(deferVideos:true)
             downloadStatus=""
             if bookmarkStopRequested || Task.isCancelled { break }
-            bookmarkJobs[index].status=succeeded ? "done" : "failed";persistBookmarkQueue()
+            if let outcome { bookmarkJobs[index].status="done";bookmarkJobs[index].itemID=outcome.itemID;bookmarkJobs[index].videoSources=outcome.videoSources;bookmarkJobs[index].downloadedVideoSources=[] }
+            else { bookmarkJobs[index].status="failed" }
+            persistBookmarkQueue()
         }
         if bookmarkStopRequested { log("[程序] 书签任务已暂停，可随时继续。") }
         else { log("[程序] 书签队列已处理完成：\(bookmarkCompleted)/\(bookmarkJobs.count)。") }
@@ -211,9 +222,44 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
         guard fm.fileExists(atPath:source.path) else{return nil}
         do{try fm.createDirectory(at:mediaCache,withIntermediateDirectories:true);if !fm.fileExists(atPath:cache.path){try fm.copyItem(at:source,to:cache)};try?fm.removeItem(at:source);return "../MediaCache/\(cache.lastPathComponent)"}catch{return nil}
     }
-    func work() async -> Bool {
-        guard !url.isEmpty, !key.isEmpty else { log("[程序] 请填写网页地址和 API Key。"); return false }
-        guard !bookmarkStopRequested, !Task.isCancelled else { return false }
+    func downloadVideos(for ids: Set<UUID>) {
+        guard !ids.isEmpty, !videoDownloadRunning else { return }
+        Task {
+            videoDownloadRunning=true; defer { videoDownloadRunning=false; downloadStatus=""; persistBookmarkQueue() }
+            for index in bookmarkJobs.indices where ids.contains(bookmarkJobs[index].id) {
+                let job=bookmarkJobs[index], sources=job.videoSources ?? [], downloaded=Set(job.downloadedVideoSources ?? [])
+                let pending=sources.filter{!downloaded.contains($0)}
+                guard !pending.isEmpty else { log("[程序] 该任务没有待下载的视频。"); continue }
+                guard let itemID=job.itemID,let item=items.first(where:{$0.id == itemID}),var html=try?String(contentsOfFile:item.file,encoding:.utf8) else { log("[程序] 任务缺少已解析网页，请先清空后重新解析。") ; continue }
+                url=job.url; let folder=URL(fileURLWithPath:item.file).deletingLastPathComponent(),assets=folder.appendingPathComponent("assets",isDirectory:true)
+                for (offset,source) in pending.enumerated() {
+                    let ordinal=(sources.firstIndex(of:source) ?? offset) + 1
+                    downloadStatus="正在下载视频 \(offset + 1)/\(pending.count)…"; log("[程序] 视频资源地址：\(source)")
+                    let cache=videoCacheFile(pageURL:job.url,ordinal:ordinal)
+                    var local:String?
+                    if fm.fileExists(atPath:cache.path) { local="../MediaCache/\(cache.lastPathComponent)" }
+                    else {
+                        let raw=source.lowercased().contains(".m3u8") ? await localHLS(source,assets:assets,number:1000 + ordinal) : await localAsset(source,assets:assets,number:1000 + ordinal)
+                        if let raw { local=cacheVideo(local:raw,folder:folder,pageURL:job.url,ordinal:ordinal) }
+                    }
+                    if let local { html=html.replacingOccurrences(of:source,with:local);bookmarkJobs[index].downloadedVideoSources=(bookmarkJobs[index].downloadedVideoSources ?? []) + [source] }
+                    else { log("[程序] 视频下载失败；地址可能已失效，可清空该任务后重新解析。") }
+                }
+                try?html.write(toFile:item.file,atomically:true,encoding:.utf8)
+            }
+        }
+    }
+    func clearVideoData(for ids: Set<UUID>) {
+        guard !ids.isEmpty, !bookmarkRunning, !videoDownloadRunning else { return }
+        for index in bookmarkJobs.indices where ids.contains(bookmarkJobs[index].id) {
+            if let itemID=bookmarkJobs[index].itemID,let itemIndex=items.firstIndex(where:{$0.id == itemID}) { try?fm.removeItem(at:URL(fileURLWithPath:items[itemIndex].file).deletingLastPathComponent());items.remove(at:itemIndex) }
+            bookmarkJobs[index].status="pending";bookmarkJobs[index].videoSources=[];bookmarkJobs[index].downloadedVideoSources=[];bookmarkJobs[index].itemID=nil
+        }
+        persist();cleanupOrphanedLibrary();persistBookmarkQueue();log("[程序] 已清空任务的视频地址和解析结果；重新开始后会再次解析。")
+    }
+    func work(deferVideos: Bool=false) async -> SaveOutcome? {
+        guard !url.isEmpty, !key.isEmpty else { log("[程序] 请填写网页地址和 API Key。"); return nil }
+        guard !bookmarkStopRequested, !Task.isCancelled else { return nil }
         var stage="初始化"
         do {
             saveConfig(); stage="读取已验证网页";log("[程序] 正在读取网页…"); try await browser.load(url)
@@ -259,11 +305,12 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
             stage="提取正文和已渲染图片";guard let raw=try await browser.js(script) as? String else { throw URLError(.cannotParseResponse) }
             let page = try JSONDecoder().decode(CapturedPage.self, from: Data(raw.utf8)); if page.missingVideo == true { throw NSError(domain:"WebOfflineSaver",code:2,userInfo:[NSLocalizedDescriptionKey:"未能从已验证页面取得实际视频资源；已取消保存，避免生成伪离线网页。"])}; if let selected=page.selectedVideo,!selected.isEmpty{log("[程序] 已锁定当前播放器视频地址：\(selected)")}; let id=UUID(), dir=root.appendingPathComponent(id.uuidString), assets=dir.appendingPathComponent("assets",isDirectory:true)
             try fm.createDirectory(at: assets, withIntermediateDirectories:true)
-            var fragment = page.html; var saved=0; var videoOrdinal=0
+            var fragment = page.html; var saved=0; var videoOrdinal=0; var deferredVideos:[String]=[]
             for (index, asset) in page.resources.enumerated() {
                 if bookmarkStopRequested || Task.isCancelled { throw CancellationError() }
                 let source=asset.url; let isHLS=source.lowercased().contains(".m3u8")
                 let isVideo=asset.kind == "video"
+                if isVideo && deferVideos { deferredVideos.append(source); continue }
                 if isVideo { videoOrdinal += 1; if let cache=cachedVideo(pageURL:url,ordinal:videoOrdinal){fragment=fragment.replacingOccurrences(of:source,with:"../MediaCache/\(cache.lastPathComponent)");saved += 1;continue};log("[程序] 视频资源地址：\(source)") }
                 if isVideo && !isHLS { downloadStatus="正在下载 MP4 视频…" }
                 let downloaded=isHLS ? await localHLS(source,assets:assets,number:index + 1) : await localAsset(source, assets:assets, number:index + 1, imageOnly:asset.kind == "image")
@@ -273,9 +320,9 @@ struct BookmarkJob: Codable, Identifiable { let id: UUID; let url: String; var s
             }
             let file=dir.appendingPathComponent("index.html")
             let pageHTML="<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><style>body{max-width:760px;margin:24px auto;padding:0 16px;font:17px/1.7 -apple-system}img,video{max-width:100%;height:auto}video{display:block;margin:14px auto}</style>\(fragment)"
-            try pageHTML.write(to:file,atomically:true,encoding:.utf8); let item=Item(id:id,title:page.title.isEmpty ? host : page.title,url:url,file:file.path);items.insert(item,at:0);persist();log("[阶段] 已保存《\(item.title)》；已离线保存 \(saved) 个资源。"); return true
-        } catch is CancellationError { log("[程序] 当前网页保存已安全暂停。"); return false }
-        catch { log("[程序] 保存失败（\(stage)）：\(error.localizedDescription)"); return false }
+            try pageHTML.write(to:file,atomically:true,encoding:.utf8); let item=Item(id:id,title:page.title.isEmpty ? host : page.title,url:url,file:file.path);items.insert(item,at:0);persist();var message="[阶段] 已保存《\(item.title)》；已离线保存 \(saved) 个资源。";if deferVideos && !deferredVideos.isEmpty{message += "视频地址已保存，尚未下载。"};log(message); return SaveOutcome(itemID:id,videoSources:deferredVideos)
+        } catch is CancellationError { log("[程序] 当前网页保存已安全暂停。"); return nil }
+        catch { log("[程序] 保存失败（\(stage)）：\(error.localizedDescription)"); return nil }
     }
     /// Keep only folders and cached videos that are still referenced by catalog.json.
     /// Failed saves create a UUID folder before their later network steps can fail,
@@ -363,11 +410,17 @@ struct BookmarkBatchTab:View{
         }
         Section("任务列表（\(s.bookmarkJobs.count)）"){
             if s.bookmarkJobs.isEmpty { Text("导入书签后，这里会列出符合域名白名单的网页。").foregroundStyle(.secondary) }
-            else { ForEach(s.bookmarkJobs){job in NavigationLink(destination:BookmarkPreview(url:job.url)){VStack(alignment:.leading,spacing:4){Text(job.url).font(.subheadline).lineLimit(2);Text(job.status == "done" ? "已完成" : job.status == "failed" ? "失败，继续时会重试" : "待处理").font(.caption).foregroundStyle(job.status == "failed" ? .red : .secondary)}}} }
+            else { ForEach(s.bookmarkJobs){job in
+                let videoCount=job.videoSources?.count ?? 0, downloadedCount=job.downloadedVideoSources?.count ?? 0
+                HStack {
+                    NavigationLink(destination:BookmarkPreview(url:job.url)){VStack(alignment:.leading,spacing:4){Text(job.url).font(.subheadline).lineLimit(2);Text(job.status == "done" ? (videoCount > 0 ? "已保存 \(videoCount) 个视频地址，已下载 \(downloadedCount) 个" : "已完成，无视频") : job.status == "failed" ? "失败，继续时会重试" : "待处理").font(.caption).foregroundStyle(job.status == "failed" ? .red : .secondary)}}
+                    if videoCount > 0 { Button { s.downloadVideos(for:Set([job.id])) } label: { Image(systemName:"arrow.down.circle") }.buttonStyle(.borderless).disabled(s.videoDownloadRunning || downloadedCount >= videoCount) }
+                }.swipeActions(edge:.trailing,allowsFullSwipe:false){Button("下载视频"){s.downloadVideos(for:Set([job.id]))}.disabled(videoCount == 0 || s.videoDownloadRunning);Button("清空",role:.destructive){s.clearVideoData(for:Set([job.id]))}.disabled(s.bookmarkRunning || s.videoDownloadRunning)}
+            } }
         }
         if s.bookmarkRunning || !s.downloadStatus.isEmpty{Section("任务进度"){HStack{if s.bookmarkRunning{ProgressView()};Text(s.downloadStatus.isEmpty ? "正在处理书签任务…" : s.downloadStatus).font(.subheadline)}}}
         Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption).textSelection(.enabled)}}
-    }.navigationTitle("书签批量保存").toolbar{ToolbarItem(placement:.topBarLeading){EditButton()};ToolbarItem(placement:.topBarTrailing){Button("删除选中"){s.deleteBookmarkJobs(selectedJobs);selectedJobs.removeAll()}.disabled(selectedJobs.isEmpty || s.bookmarkRunning)}}.fileImporter(isPresented:$importingBookmarks,allowedContentTypes:[.html,.plainText],allowsMultipleSelection:false){result in switch result {case .success(let files):guard let file=files.first else{return};let allowed=file.startAccessingSecurityScopedResource();defer{if allowed{file.stopAccessingSecurityScopedResource()}};s.importBookmarks(file);case .failure(let error):s.log("[程序] 导入书签失败：\(error.localizedDescription)")}}}
+    }.navigationTitle("书签批量保存").toolbar{ToolbarItem(placement:.topBarLeading){EditButton()};ToolbarItem(placement:.topBarTrailing){Button("删除选中"){s.deleteBookmarkJobs(selectedJobs);selectedJobs.removeAll()}.disabled(selectedJobs.isEmpty || s.bookmarkRunning || s.videoDownloadRunning)};ToolbarItemGroup(placement:.bottomBar){Button("下载选中视频"){s.downloadVideos(for:selectedJobs)}.disabled(selectedJobs.isEmpty || s.videoDownloadRunning);Spacer();Button("清空选中"){s.clearVideoData(for:selectedJobs);selectedJobs.removeAll()}.disabled(selectedJobs.isEmpty || s.bookmarkRunning || s.videoDownloadRunning)}}.fileImporter(isPresented:$importingBookmarks,allowedContentTypes:[.html,.plainText],allowsMultipleSelection:false){result in switch result {case .success(let files):guard let file=files.first else{return};let allowed=file.startAccessingSecurityScopedResource();defer{if allowed{file.stopAccessingSecurityScopedResource()}};s.importBookmarks(file);case .failure(let error):s.log("[程序] 导入书签失败：\(error.localizedDescription)")}}}
     }
 }
 struct DownloadedTab:View{
