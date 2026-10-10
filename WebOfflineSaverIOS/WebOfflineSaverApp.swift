@@ -92,6 +92,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
     @Published var archiveGroups:[ArchiveGroup]=[]
     private var bookmarkStopRequested=false
     private var activeBookmarkFilter="all"
+    private var renderedImageRules=Set(UserDefaults.standard.stringArray(forKey:"wo.rendered.image.rules") ?? [])
     let browser=Browser(); let fm=FileManager.default
     var root:URL{fm.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("OfflineLibrary",isDirectory:true)}
     var mediaCache:URL{root.appendingPathComponent("MediaCache",isDirectory:true)}
@@ -175,6 +176,21 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         let bytes=[UInt8](data.prefix(16))
         return bytes.starts(with:[0xFF,0xD8,0xFF]) || bytes.starts(with:[0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A]) || bytes.starts(with:[0x47,0x49,0x46,0x38]) || (bytes.count >= 12 && Array(bytes[0..<4]) == [0x52,0x49,0x46,0x46] && Array(bytes[8..<12]) == [0x57,0x45,0x42,0x50]) || (bytes.count >= 12 && String(bytes:bytes[4..<12],encoding:.ascii)?.contains("ftypavif") == true)
     }
+    func shouldUseRenderedImage(_ source: String) -> Bool {
+        let imageHost=URL(string:source)?.host?.lowercased()
+        let pageHost=URL(string:url)?.host?.lowercased()
+        return (imageHost.map{"image:\($0)"}.map{renderedImageRules.contains($0)} ?? false) || (pageHost.map{"page:\($0)"}.map{renderedImageRules.contains($0)} ?? false)
+    }
+    func rememberRenderedImageRule(_ source: String) {
+        let imageHost=URL(string:source)?.host?.lowercased()
+        let pageHost=URL(string:url)?.host?.lowercased()
+        let previous=renderedImageRules.count
+        if let imageHost { renderedImageRules.insert("image:\(imageHost)") }
+        if let pageHost { renderedImageRules.insert("page:\(pageHost)") }
+        guard renderedImageRules.count != previous else { return }
+        UserDefaults.standard.set(Array(renderedImageRules).sorted(),forKey:"wo.rendered.image.rules")
+        log("[程序] 已记住该网页的图片需要从已渲染页面保存。")
+    }
     func htmlEscaped(_ value: String) -> String { value.replacingOccurrences(of:"&",with:"&amp;").replacingOccurrences(of:"<",with:"&lt;").replacingOccurrences(of:">",with:"&gt;").replacingOccurrences(of:"\"",with:"&quot;") }
     func renderedImage(_ source:String, assets:URL, number:Int) async -> String? {
         guard let encoded=try?JSONEncoder().encode(source),let literal=String(data:encoded,encoding:.utf8) else{return nil}
@@ -194,18 +210,19 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             let name=String(format:"%03d.%@",number,ext); try? data.write(to:assets.appendingPathComponent(name),options:.atomic); return "assets/\(name)"
         }
         guard let remote = URL(string: source), ["http", "https"].contains(remote.scheme?.lowercased() ?? "") else { return nil }
+        if imageOnly && shouldUseRenderedImage(source) { return await renderedImage(source,assets:assets,number:number) }
         do {
             var request = URLRequest(url: remote); request.setValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36", forHTTPHeaderField: "User-Agent"); request.setValue(imageOnly ? "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8" : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",forHTTPHeaderField:"Accept");request.setValue("zh-CN,zh;q=0.9,en;q=0.8",forHTTPHeaderField:"Accept-Language");request.setValue(url,forHTTPHeaderField:"Referer"); let cookies=await browser.cookieHeader(for:remote); if !cookies.isEmpty{request.setValue(cookies,forHTTPHeaderField:"Cookie")}
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), !data.isEmpty else { return nil }
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), !data.isEmpty else { if imageOnly { rememberRenderedImageRule(source);return await renderedImage(source,assets:assets,number:number) };return nil }
             let mime = (response.mimeType ?? "").lowercased()
             let pathExt = remote.pathExtension.lowercased()
             let ext: String = mime.contains("png") ? "png" : mime.contains("jpeg") || mime.contains("jpg") ? "jpg" : mime.contains("gif") ? "gif" : mime.contains("webp") ? "webp" : mime.contains("mp4") ? "mp4" : pathExt.isEmpty ? "bin" : pathExt
             let name = String(format: "%03d.%@", number, ext)
-            guard !imageOnly || validImage(data) else { return await renderedImage(source,assets:assets,number:number) }
+            guard !imageOnly || validImage(data) else { rememberRenderedImageRule(source);return await renderedImage(source,assets:assets,number:number) }
             try data.write(to: assets.appendingPathComponent(name), options: .atomic)
             return "assets/\(name)"
-        } catch { log("[程序] 资源下载失败：\(source)（\(error.localizedDescription)）"); return imageOnly ? await renderedImage(source,assets:assets,number:number) : nil }
+        } catch { if imageOnly { rememberRenderedImageRule(source);return await renderedImage(source,assets:assets,number:number) };log("[程序] 资源下载失败：\(source)（\(error.localizedDescription)）");return nil }
     }
     /// Fetches the ordinary HLS media playlist and its dependencies in batches of
     /// four.  FFmpeg is still used for the final remux so encrypted/fMP4 streams
