@@ -7,7 +7,7 @@ import UIKit
 @main struct WebOfflineSaverApp: App { @StateObject var store = Store(); var body: some Scene { WindowGroup { Home().environmentObject(store) } } }
 struct Plan: Codable { let contentSelector: String; let titleSelector: String?; let excludes: [String] }
 struct CachedPlan: Codable { let version: Int; let plan: Plan }
-struct Item: Codable, Identifiable, Hashable { let id: UUID; let title, url, file: String }
+struct Item: Codable, Identifiable, Hashable { let id: UUID; let title, url, file: String; var groupID: UUID? }
 struct AssetRef: Codable { let url: String; let kind: String }
 struct CapturedPage: Decodable { let title: String; let html: String; let resources: [AssetRef]; let selectedVideo: String?; let missingVideo: Bool? }
 struct BookmarkJob: Codable, Identifiable {
@@ -17,7 +17,9 @@ struct BookmarkJob: Codable, Identifiable {
     var videoSources: [String]?
     var downloadedVideoSources: [String]?
     var itemID: UUID?
+    var groupID: UUID?
 }
+struct ArchiveGroup: Codable, Identifiable, Hashable { let id: UUID; var name: String }
 struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
 
 @MainActor final class Browser: NSObject, ObservableObject, WKNavigationDelegate {
@@ -86,11 +88,12 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
     @Published var bookmarkCurrent=0
     @Published var videoDownloadRunning=false
     @Published var videoDownloadingJobs=Set<UUID>()
+    @Published var archiveGroups:[ArchiveGroup]=[]
     private var bookmarkStopRequested=false
     let browser=Browser(); let fm=FileManager.default
     var root:URL{fm.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("OfflineLibrary",isDirectory:true)}
     var mediaCache:URL{root.appendingPathComponent("MediaCache",isDirectory:true)}
-    init(){if let d=try?Data(contentsOf:root.appendingPathComponent("catalog.json")){items=(try?JSONDecoder().decode([Item].self,from:d)) ?? []};if let d=UserDefaults.standard.data(forKey:"wo.bookmark.queue"){bookmarkJobs=(try?JSONDecoder().decode([BookmarkJob].self,from:d)) ?? []};_ = cleanupOrphanedLibrary()}
+    init(){if let d=try?Data(contentsOf:root.appendingPathComponent("catalog.json")){items=(try?JSONDecoder().decode([Item].self,from:d)) ?? []};if let d=UserDefaults.standard.data(forKey:"wo.bookmark.queue"){bookmarkJobs=(try?JSONDecoder().decode([BookmarkJob].self,from:d)) ?? []};if let d=UserDefaults.standard.data(forKey:"wo.archive.groups"){archiveGroups=(try?JSONDecoder().decode([ArchiveGroup].self,from:d)) ?? []};_ = cleanupOrphanedLibrary()}
     func log(_ x:String){logs.append(x);if logs.count>50{logs.removeFirst(logs.count-50)}}
     func saveConfig(){UserDefaults.standard.set(url,forKey:"wo.url");UserDefaults.standard.set(key,forKey:"wo.key");UserDefaults.standard.set(api,forKey:"wo.api");UserDefaults.standard.set(model,forKey:"wo.model");UserDefaults.standard.set(force,forKey:"wo.force");UserDefaults.standard.set(bookmarkDomains,forKey:"wo.bookmark.domains");log("[程序] 配置已保存。")}
     func open(){saveConfig();browser.open(url);browserShown=true;log("[程序] 已打开验证浏览器，请完成验证。")}
@@ -101,6 +104,11 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
     func save(){Task{if !bookmarkRunning{bookmarkStopRequested=false};downloading=true;downloadStatus="正在准备保存网页…";defer{downloading=false;downloadStatus=""};_ = await work()}}
     var bookmarkCompleted: Int { bookmarkJobs.filter{$0.status == "done" || $0.status == "failed"}.count }
     func persistBookmarkQueue(){UserDefaults.standard.set(try?JSONEncoder().encode(bookmarkJobs),forKey:"wo.bookmark.queue")}
+    func persistArchiveGroups(){UserDefaults.standard.set(try?JSONEncoder().encode(archiveGroups),forKey:"wo.archive.groups")}
+    func createArchiveGroup(_ name: String) { let trimmed=name.trimmingCharacters(in:.whitespacesAndNewlines);guard !trimmed.isEmpty,!archiveGroups.contains(where:{$0.name == trimmed}) else{return};archiveGroups.append(ArchiveGroup(id:UUID(),name:trimmed));persistArchiveGroups();log("[程序] 已创建归档分组《\(trimmed)》。") }
+    func removeArchiveGroups(_ offsets: IndexSet) { let ids=Set(offsets.map{archiveGroups[$0].id});archiveGroups.remove(atOffsets:offsets);for index in bookmarkJobs.indices where ids.contains(bookmarkJobs[index].groupID ?? UUID()){bookmarkJobs[index].groupID=nil};for index in items.indices where ids.contains(items[index].groupID ?? UUID()){items[index].groupID=nil};persistArchiveGroups();persistBookmarkQueue();persist() }
+    func moveBookmarkJobs(_ ids: Set<UUID>, to groupID: UUID?) { for index in bookmarkJobs.indices where ids.contains(bookmarkJobs[index].id){bookmarkJobs[index].groupID=groupID};persistBookmarkQueue() }
+    func moveItems(_ ids: Set<UUID>, to groupID: UUID?) { for index in items.indices where ids.contains(items[index].id){items[index].groupID=groupID};persist() }
     func deleteBookmarkJobs(_ ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
         bookmarkJobs.removeAll { ids.contains($0.id) }
@@ -122,7 +130,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         guard let expression=try?NSRegularExpression(pattern:"(?i)href\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]") else { return }
         let links=expression.matches(in:text,range:NSRange(text.startIndex...,in:text)).compactMap{match -> String? in guard let range=Range(match.range(at:1),in:text),let address=URL(string:String(text[range])),["http","https"].contains(address.scheme?.lowercased() ?? "") else{return nil};return rules.contains(where:{matches(address,rule:$0)}) ? address.absoluteString : nil}
         let known=Set(bookmarkJobs.map{$0.url}).union(Set(items.map{$0.url})); let unique=Array(Set(links)).filter{!known.contains($0)}.sorted()
-        bookmarkJobs += unique.map{BookmarkJob(id:UUID(),url:$0,status:"pending",videoSources:[],downloadedVideoSources:[],itemID:nil)}; persistBookmarkQueue(); log("[程序] 书签共匹配到 \(links.count) 个网页，已加入 \(unique.count) 个未重复任务。")
+        bookmarkJobs += unique.map{BookmarkJob(id:UUID(),url:$0,status:"pending",videoSources:[],downloadedVideoSources:[],itemID:nil,groupID:nil)}; persistBookmarkQueue(); log("[程序] 书签共匹配到 \(links.count) 个网页，已加入 \(unique.count) 个未重复任务。")
     }
     func startBookmarkQueue() {
         guard !bookmarkRunning else{return}; guard !bookmarkJobs.isEmpty else{log("[程序] 暂无书签任务。");return}
@@ -138,7 +146,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             let outcome=await work(deferVideos:true)
             downloadStatus=""
             if bookmarkStopRequested || Task.isCancelled { break }
-            if let outcome { bookmarkJobs[index].status="done";bookmarkJobs[index].itemID=outcome.itemID;bookmarkJobs[index].videoSources=outcome.videoSources;bookmarkJobs[index].downloadedVideoSources=[] }
+            if let outcome { bookmarkJobs[index].status="done";bookmarkJobs[index].itemID=outcome.itemID;bookmarkJobs[index].videoSources=outcome.videoSources;bookmarkJobs[index].downloadedVideoSources=[];if let itemIndex=items.firstIndex(where:{$0.id == outcome.itemID}){items[itemIndex].groupID=bookmarkJobs[index].groupID;persist()} }
             else { bookmarkJobs[index].status="failed" }
             persistBookmarkQueue()
         }
@@ -347,7 +355,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
                 if let local { fragment = fragment.replacingOccurrences(of: source, with: local); saved += 1 }
                 else if isVideo { throw NSError(domain:"WebOfflineSaver",code:1,userInfo:[NSLocalizedDescriptionKey:"视频资源未能下载，已取消保存以避免生成伪离线网页。"]) }
             }
-            let file=dir.appendingPathComponent("index.html"),item=Item(id:id,title:page.title.isEmpty ? host : page.title,url:url,file:file.path)
+            let file=dir.appendingPathComponent("index.html"),item=Item(id:id,title:page.title.isEmpty ? host : page.title,url:url,file:file.path,groupID:nil)
             let pageHTML="<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><style>body{max-width:760px;margin:24px auto;padding:0 16px;font:17px/1.7 -apple-system}.offline-page-title{font-size:1.45em;line-height:1.35;margin:0 0 1em}img,video{max-width:100%;height:auto}video{display:block;margin:14px auto}</style><h1 class='offline-page-title'>\(htmlEscaped(item.title))</h1>\(fragment)"
             try pageHTML.write(to:file,atomically:true,encoding:.utf8);items.insert(item,at:0);persist();var message="[阶段] 已保存《\(item.title)》；已离线保存 \(saved) 个资源。";if deferVideos && !deferredVideos.isEmpty{message += "视频地址已保存，尚未下载。"};log(message); return SaveOutcome(itemID:id,videoSources:deferredVideos)
         } catch is CancellationError { log("[程序] 当前网页保存已安全暂停。"); return nil }
@@ -393,6 +401,11 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         if removed > 0 { message += "已额外清理 \(removed) 项遗留资源。" }
         log(message)
     }
+    func deleteItems(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else{return}
+        for item in items where ids.contains(item.id) { try?fm.removeItem(at:URL(fileURLWithPath:item.file).deletingLastPathComponent()) }
+        items.removeAll{ids.contains($0.id)};persist();_ = cleanupOrphanedLibrary();log("[程序] 已删除 \(ids.count) 个已下载网页及对应资源。")
+    }
     func persist(){try?fm.createDirectory(at:root,withIntermediateDirectories:true);try?JSONEncoder().encode(items).write(to:root.appendingPathComponent("catalog.json"))}
 }
 struct Home:View{
@@ -423,6 +436,8 @@ struct BookmarkBatchTab:View{
     @State private var importingBookmarks=false
     @State private var selectedJobs=Set<UUID>()
     @State private var editMode: EditMode = .inactive
+    @State private var groupFilter="all"
+    var visibleJobs:[BookmarkJob] { groupFilter == "all" ? s.bookmarkJobs : groupFilter == "none" ? s.bookmarkJobs.filter{$0.groupID == nil} : s.bookmarkJobs.filter{$0.groupID?.uuidString == groupFilter} }
     var body:some View{NavigationStack{List(selection:$selectedJobs){
         Section("书签批量保存"){
             TextEditor(text:$s.bookmarkDomains).frame(minHeight:72).textInputAutocapitalization(.never)
@@ -438,9 +453,10 @@ struct BookmarkBatchTab:View{
                 }
             }
         }
-        Section("任务列表（\(s.bookmarkJobs.count)）"){
-            if s.bookmarkJobs.isEmpty { Text("导入书签后，这里会列出符合域名白名单的网页。").foregroundStyle(.secondary) }
-            else { ForEach(s.bookmarkJobs){job in
+        Section("归档筛选"){Picker("显示",selection:$groupFilter){Text("全部任务").tag("all");Text("未分组").tag("none");ForEach(s.archiveGroups){group in Text(group.name).tag(group.id.uuidString)}}.onChange(of:groupFilter){_ in selectedJobs.removeAll()}}
+        Section("任务列表（\(visibleJobs.count)）"){
+            if visibleJobs.isEmpty { Text("当前分组没有任务。").foregroundStyle(.secondary) }
+            else { ForEach(visibleJobs){job in
                 let videoCount=job.videoSources?.count ?? 0, downloadedCount=job.downloadedVideoSources?.count ?? 0
                 HStack {
                     NavigationLink(destination:BookmarkPreview(url:job.url)){VStack(alignment:.leading,spacing:4){Text(job.url).font(.subheadline).lineLimit(2);Text(job.status == "done" ? (videoCount > 0 ? "已保存 \(videoCount) 个视频地址，已下载 \(downloadedCount) 个" : "已完成，无视频") : job.status == "failed" ? "失败，继续时会重试" : "待处理").font(.caption).foregroundStyle(job.status == "failed" ? .red : .secondary)}}
@@ -450,15 +466,20 @@ struct BookmarkBatchTab:View{
         }
         if s.bookmarkRunning || s.videoDownloadRunning || !s.downloadStatus.isEmpty{Section("任务进度"){HStack{if s.bookmarkRunning || s.videoDownloadRunning{ProgressView()};Text(s.downloadStatus.isEmpty ? "正在处理书签任务…" : s.downloadStatus).font(.subheadline)}}}
         Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption).textSelection(.enabled)}}
-    }.navigationTitle("书签批量保存").environment(\.editMode,$editMode).toolbar{ToolbarItemGroup(placement:.topBarLeading){Button(editMode.isEditing ? "完成" : "多选"){editMode=editMode.isEditing ? .inactive : .active;if !editMode.isEditing{selectedJobs.removeAll()}};if editMode.isEditing{Button("全选"){selectedJobs=Set(s.bookmarkJobs.map{$0.id})}.disabled(s.bookmarkJobs.isEmpty)}};ToolbarItem(placement:.topBarTrailing){Button("删除选中"){s.deleteBookmarkJobs(selectedJobs);selectedJobs.removeAll()}.disabled(selectedJobs.isEmpty || s.bookmarkRunning || s.videoDownloadRunning)};ToolbarItemGroup(placement:.bottomBar){Button("下载选中视频"){s.downloadVideos(for:selectedJobs)}.disabled(selectedJobs.isEmpty || s.videoDownloadRunning);Spacer()}}.fileImporter(isPresented:$importingBookmarks,allowedContentTypes:[.html,.plainText],allowsMultipleSelection:false){result in switch result {case .success(let files):guard let file=files.first else{return};let allowed=file.startAccessingSecurityScopedResource();defer{if allowed{file.stopAccessingSecurityScopedResource()}};s.importBookmarks(file);case .failure(let error):s.log("[程序] 导入书签失败：\(error.localizedDescription)")}}}
+    }.navigationTitle("书签批量保存").environment(\.editMode,$editMode).toolbar{ToolbarItemGroup(placement:.topBarLeading){Button(editMode.isEditing ? "完成" : "多选"){editMode=editMode.isEditing ? .inactive : .active;if !editMode.isEditing{selectedJobs.removeAll()}};if editMode.isEditing{Button("全选"){selectedJobs=Set(visibleJobs.map{$0.id})}.disabled(visibleJobs.isEmpty)}};ToolbarItem(placement:.topBarTrailing){Button("删除选中"){s.deleteBookmarkJobs(selectedJobs);selectedJobs.removeAll()}.disabled(selectedJobs.isEmpty || s.bookmarkRunning || s.videoDownloadRunning)};ToolbarItemGroup(placement:.bottomBar){Button("下载选中视频"){s.downloadVideos(for:selectedJobs)}.disabled(selectedJobs.isEmpty || s.videoDownloadRunning);Menu("移动到分组"){Button("未分组"){s.moveBookmarkJobs(selectedJobs,to:nil);selectedJobs.removeAll()};ForEach(s.archiveGroups){group in Button(group.name){s.moveBookmarkJobs(selectedJobs,to:group.id);selectedJobs.removeAll()}}}.disabled(selectedJobs.isEmpty);Spacer()}}.fileImporter(isPresented:$importingBookmarks,allowedContentTypes:[.html,.plainText],allowsMultipleSelection:false){result in switch result {case .success(let files):guard let file=files.first else{return};let allowed=file.startAccessingSecurityScopedResource();defer{if allowed{file.stopAccessingSecurityScopedResource()}};s.importBookmarks(file);case .failure(let error):s.log("[程序] 导入书签失败：\(error.localizedDescription)")}}}
     }
 }
 struct DownloadedTab:View{
     @EnvironmentObject var s:Store
-    var body:some View{NavigationStack{List{Section("已下载网页"){if s.items.isEmpty{Text("尚未保存网页").foregroundStyle(.secondary)}else{ForEach(s.items){item in NavigationLink(destination:OfflinePreview(item:item)){Text(item.title).foregroundStyle(.primary)}}.onDelete(perform:s.delete)}}}.navigationTitle("已下载")}}
+    @State private var selectedItems=Set<UUID>()
+    @State private var editMode: EditMode = .inactive
+    @State private var groupFilter="all"
+    var visibleItems:[Item] { groupFilter == "all" ? s.items : groupFilter == "none" ? s.items.filter{$0.groupID == nil} : s.items.filter{$0.groupID?.uuidString == groupFilter} }
+    var body:some View{NavigationStack{List(selection:$selectedItems){Section("归档筛选"){Picker("显示",selection:$groupFilter){Text("全部网页").tag("all");Text("未分组").tag("none");ForEach(s.archiveGroups){group in Text(group.name).tag(group.id.uuidString)}}.onChange(of:groupFilter){_ in selectedItems.removeAll()}};Section("已下载网页（\(visibleItems.count)）"){if visibleItems.isEmpty{Text("当前分组没有已下载网页。").foregroundStyle(.secondary)}else{ForEach(visibleItems){item in NavigationLink(destination:OfflinePreview(item:item)){Text(item.title).foregroundStyle(.primary)}.tag(item.id)}}}.navigationTitle("已下载").environment(\.editMode,$editMode).toolbar{ToolbarItemGroup(placement:.topBarLeading){Button(editMode.isEditing ? "完成" : "多选"){editMode=editMode.isEditing ? .inactive : .active;if !editMode.isEditing{selectedItems.removeAll()}};if editMode.isEditing{Button("全选"){selectedItems=Set(visibleItems.map{$0.id})}.disabled(visibleItems.isEmpty)}};ToolbarItem(placement:.topBarTrailing){Button("删除选中"){s.deleteItems(selectedItems);selectedItems.removeAll()}.disabled(selectedItems.isEmpty)};ToolbarItem(placement:.bottomBar){Menu("移动到分组"){Button("未分组"){s.moveItems(selectedItems,to:nil);selectedItems.removeAll()};ForEach(s.archiveGroups){group in Button(group.name){s.moveItems(selectedItems,to:group.id);selectedItems.removeAll()}}}.disabled(selectedItems.isEmpty)}}}}
 }
 struct ConfigurationTab: View {
     @EnvironmentObject var s: Store
+    @State private var newGroupName=""
     var body: some View { NavigationStack { List {
         Section("大模型配置") {
             SecureField("DeepSeek API Key", text: $s.key)
@@ -468,6 +489,11 @@ struct ConfigurationTab: View {
             if !s.models.isEmpty { Picker("选择模型", selection: $s.model) { ForEach(s.models,id:\.self) { Text($0).tag($0) } } }
             Toggle("每次都 AI 识别", isOn: $s.force)
             Button("保存配置") { s.saveConfig() }
+        }
+        Section("归档分组") {
+            HStack { TextField("新分组名称",text:$newGroupName);Button("新建"){s.createArchiveGroup(newGroupName);newGroupName=""} }
+            if s.archiveGroups.isEmpty { Text("创建分组后，可将书签任务和已下载网页移动到其中。删除分组不会删除其中的内容，只会恢复为未分组。").font(.caption).foregroundStyle(.secondary) }
+            else { ForEach(s.archiveGroups){group in Text(group.name)}.onDelete(perform:s.removeArchiveGroups) }
         }
     }.navigationTitle("配置") } }
 }
