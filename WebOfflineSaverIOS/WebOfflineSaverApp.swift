@@ -661,20 +661,16 @@ struct WebSheet: View {
 struct OfflinePreview: View {
     @EnvironmentObject var s: Store
     @State private var activeItem: Item
-    @State private var drawing=false
-    @State private var clearAnnotations=0
     @State private var showingGuidance=false
     @State private var guidance=""
     init(item: Item) { _activeItem=State(initialValue:item) }
     var body: some View {
-        LocalWebView(file: URL(fileURLWithPath: activeItem.file),title:activeItem.title,drawing:$drawing,clearAnnotations:clearAnnotations).id(activeItem.id)
+        LocalWebView(file: URL(fileURLWithPath: activeItem.file),title:activeItem.title).id(activeItem.id)
             .navigationTitle(activeItem.title).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement:.topBarTrailing) {
-                    Button { drawing.toggle() } label: { Image(systemName:drawing ? "pencil.circle.fill" : "pencil.circle") }.accessibilityLabel(drawing ? "结束标注" : "手动标注")
                     Button { showingGuidance=true } label: { Image(systemName:"square.and.pencil") }.accessibilityLabel("修改要求")
                     Button { s.reparse(activeItem,guidance:guidance) { activeItem=$0 } } label: { Image(systemName:"paperplane.fill") }.accessibilityLabel("提交给大模型重新识别").disabled(s.downloading)
-                    if drawing { Button { clearAnnotations += 1 } label: { Image(systemName:"trash") }.accessibilityLabel("清除标注") }
                 }
             }
             .sheet(isPresented:$showingGuidance) {
@@ -689,11 +685,9 @@ struct OfflinePreview: View {
 struct LocalWebView: UIViewRepresentable {
     let file: URL
     let title: String
-    @Binding var drawing: Bool
-    let clearAnnotations: Int
     func makeCoordinator() -> Coordinator { Coordinator(owner:self) }
-    func makeUIView(context: Context) -> AnnotationContainerView { let configuration=WKWebViewConfiguration();configuration.userContentController.add(context.coordinator,name:"offlineImage");let webView=WKWebView(frame:.zero,configuration:configuration);webView.navigationDelegate=context.coordinator;webView.uiDelegate=context.coordinator;let view=AnnotationContainerView(webView:webView);view.canvas.isDrawing=drawing;view.clearGeneration=clearAnnotations;webView.loadFileURL(file, allowingReadAccessTo:file.deletingLastPathComponent().deletingLastPathComponent());return view }
-    func updateUIView(_ view: AnnotationContainerView, context: Context) { view.canvas.isDrawing=drawing;if view.clearGeneration != clearAnnotations { view.canvas.clear();view.clearGeneration=clearAnnotations } }
+    func makeUIView(context: Context) -> WKWebView { let configuration=WKWebViewConfiguration();configuration.userContentController.add(context.coordinator,name:"offlineImage");let view=WKWebView(frame:.zero,configuration:configuration);view.navigationDelegate=context.coordinator;view.uiDelegate=context.coordinator;view.loadFileURL(file, allowingReadAccessTo:file.deletingLastPathComponent().deletingLastPathComponent());return view }
+    func updateUIView(_ view: WKWebView, context: Context) {}
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         let owner: LocalWebView
         init(owner: LocalWebView) { self.owner=owner }
@@ -729,29 +723,6 @@ struct LocalWebView: UIViewRepresentable {
         }
         func topController(from controller: UIViewController?) -> UIViewController? { if let presented=controller?.presentedViewController{return topController(from:presented)};if let navigation=controller as? UINavigationController{return topController(from:navigation.visibleViewController)};if let tab=controller as? UITabBarController{return topController(from:tab.selectedViewController)};return controller }
     }
-}
-final class AnnotationContainerView: UIView {
-    let canvas=AnnotationCanvasView()
-    var clearGeneration=0
-    init(webView: WKWebView) {
-        super.init(frame:.zero)
-        webView.frame=bounds;webView.autoresizingMask=[.flexibleWidth,.flexibleHeight];addSubview(webView)
-        canvas.frame=bounds;canvas.autoresizingMask=[.flexibleWidth,.flexibleHeight];addSubview(canvas)
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-}
-final class AnnotationCanvasView: UIView {
-    var isDrawing=false { didSet { isUserInteractionEnabled=isDrawing;alpha=isDrawing ? 1 : 0 } }
-    private var paths=[UIBezierPath]()
-    private var activePath:UIBezierPath?
-    override init(frame:CGRect) { super.init(frame:frame);backgroundColor=.clear;isDrawing=false }
-    required init?(coder:NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func touchesBegan(_ touches:Set<UITouch>,with event:UIEvent?) { guard isDrawing,let point=touches.first?.location(in:self) else{return};let path=UIBezierPath();path.lineWidth=4;path.lineCapStyle=.round;path.lineJoinStyle=.round;path.move(to:point);paths.append(path);activePath=path;setNeedsDisplay() }
-    override func touchesMoved(_ touches:Set<UITouch>,with event:UIEvent?) { guard isDrawing,let point=touches.first?.location(in:self),let path=activePath else{return};path.addLine(to:point);setNeedsDisplay() }
-    override func touchesEnded(_ touches:Set<UITouch>,with event:UIEvent?) { activePath=nil }
-    override func touchesCancelled(_ touches:Set<UITouch>,with event:UIEvent?) { activePath=nil }
-    override func draw(_ rect:CGRect) { UIColor.systemRed.withAlphaComponent(0.86).setStroke();for path in paths { path.stroke() } }
-    func clear(){paths.removeAll();setNeedsDisplay()}
 }
 final class ImagePreviewController: UIViewController, UIScrollViewDelegate {
     let imageURL: URL
