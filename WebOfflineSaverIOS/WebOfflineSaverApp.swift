@@ -435,7 +435,8 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             saveConfig(); stage="读取已验证网页";let existingMarked=try await browser.markedStructure();if existingMarked.isEmpty { log("[程序] 正在读取网页…");try await browser.load(url) } else { log("[程序] 将使用验证浏览器中手动标记的主体内容。") }
             stage="等待正文图片渲染";try await browser.prepareRenderedImages()
             stage="生成网页结构骨架"
-            let markedSkeleton=try await browser.markedStructure(),manualSelection=!markedSkeleton.isEmpty
+            let markedSkeleton=try await browser.markedStructure()
+            let manualSelection = !markedSkeleton.isEmpty
             let skeleton = manualSelection ? markedSkeleton : (try await browser.js("(()=>[...document.querySelectorAll('main,article,section,div')].slice(0,500).map(x=>'<'+x.tagName.toLowerCase()+' id=\"'+(x.id||'')+'\" class=\"'+(x.className||'')+'\">').join('\\n'))()") as? String ?? "")
             let host = URL(string:url)?.host ?? "site"; stage="AI 主体结构识别";let p = try await getPlan(host:host, skeleton:skeleton,manualSelection:manualSelection)
             let q = String(data:try JSONEncoder().encode(p.contentSelector),encoding:.utf8)!; let ex = String(data:try JSONEncoder().encode(p.excludes),encoding:.utf8)!; let ti = String(data:try JSONEncoder().encode(p.titleSelector ?? ""),encoding:.utf8)!
