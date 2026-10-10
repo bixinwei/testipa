@@ -67,6 +67,25 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         """
         _ = try await asyncJS(script)
     }
+    /// Canvas export is blocked by some image CDNs.  WKWebView's native snapshot
+    /// captures the pixels already rendered by WebKit and therefore does not use
+    /// the image URL again or depend on that CDN's CORS policy.
+    func snapshotRenderedImage(_ source: String) async -> Data? {
+        guard let encoded=try?JSONEncoder().encode(source),let literal=String(data:encoded,encoding:.utf8),
+              let raw=try?await js("""
+              (async()=>{const wanted=\(literal),same=value=>{if(!value)return false;if(value===wanted)return true;try{const a=new URL(value,document.baseURI),b=new URL(wanted,document.baseURI);return a.origin===b.origin&&a.pathname===b.pathname}catch(_){return false}};const image=[...document.images].find(item=>[item.currentSrc,item.src,item.getAttribute('data-xkrkllgl'),item.getAttribute('data-original'),item.getAttribute('data-lazy-src'),item.getAttribute('data-src')].some(same));if(!image)return null;image.scrollIntoView({block:'center',inline:'center'});await new Promise(resolve=>setTimeout(resolve,180));const rect=image.getBoundingClientRect();return JSON.stringify({x:rect.x,y:rect.y,width:rect.width,height:rect.height})})()
+              """) as? String,
+              let object=try?JSONSerialization.jsonObject(with:Data(raw.utf8)) as? [String:Any],
+              let x=(object["x"] as? NSNumber)?.doubleValue,let y=(object["y"] as? NSNumber)?.doubleValue,let width=(object["width"] as? NSNumber)?.doubleValue,let height=(object["height"] as? NSNumber)?.doubleValue else{return nil}
+        let requested=CGRect(x:x,y:y,width:width,height:height).intersection(view.bounds)
+        guard requested.width > 1,requested.height > 1 else{return nil}
+        let configuration=WKSnapshotConfiguration();configuration.rect=requested
+        return await withCheckedContinuation { continuation in
+            view.takeSnapshot(with:configuration) { image,error in
+                continuation.resume(returning:error == nil ? image?.pngData() : nil)
+            }
+        }
+    }
     func webView(_ w:WKWebView,didFinish n:WKNavigation!){completedURL=w.url;wait?.resume();wait=nil}; func webView(_ w:WKWebView,didFail n:WKNavigation!,withError e:Error){wait?.resume(throwing:e);wait=nil}; func webView(_ w:WKWebView,didFailProvisionalNavigation n:WKNavigation!,withError e:Error){wait?.resume(throwing:e);wait=nil}
 }
 
@@ -213,8 +232,11 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         let script="""
         (()=>{const wanted=\(literal),same=(value=>{if(!value)return false;if(value===wanted)return true;try{const a=new URL(value,document.baseURI),b=new URL(wanted,document.baseURI);return a.origin===b.origin&&a.pathname===b.pathname}catch(_){return false}});const image=[...document.images].find(x=>[x.currentSrc,x.src,x.getAttribute('data-xkrkllgl'),x.getAttribute('data-original'),x.getAttribute('data-lazy-src'),x.getAttribute('data-src')].some(same));if(!image)return null;try{const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;if(!canvas.width||!canvas.height)return null;canvas.getContext('2d').drawImage(image,0,0);return canvas.toDataURL('image/png')}catch(_){return null}})()
         """
-        guard let value=try?await browser.js(script),let raw=value as? String,let comma=raw.firstIndex(of:","),let data=Data(base64Encoded:String(raw[raw.index(after:comma)...])),validImage(data) else{return nil}
-        let name=String(format:"%03d.png",number);try?data.write(to:assets.appendingPathComponent(name),options:.atomic);return "assets/\(name)"
+        if let value=try?await browser.js(script),let raw=value as? String,let comma=raw.firstIndex(of:","),let data=Data(base64Encoded:String(raw[raw.index(after:comma)...])),validImage(data) {
+            let name=String(format:"%03d.png",number);try?data.write(to:assets.appendingPathComponent(name),options:.atomic);return "assets/\(name)"
+        }
+        guard let snapshot=await browser.snapshotRenderedImage(source),validImage(snapshot) else{return nil}
+        let name=String(format:"%03d.png",number);try?snapshot.write(to:assets.appendingPathComponent(name),options:.atomic);return "assets/\(name)"
     }
     func localAsset(_ source: String, assets: URL, number: Int, imageOnly: Bool=false) async -> String? {
         if source.lowercased().hasPrefix("data:image/") {
@@ -224,7 +246,13 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             let name=String(format:"%03d.%@",number,ext); try? data.write(to:assets.appendingPathComponent(name),options:.atomic); return "assets/\(name)"
         }
         guard let remote = URL(string: source), ["http", "https"].contains(remote.scheme?.lowercased() ?? "") else { return nil }
-        if imageOnly && shouldUseRenderedImage(source),let rendered=await renderedImage(source,assets:assets,number:number) { return rendered }
+        if imageOnly {
+            for _ in 0..<3 {
+                if let rendered=await renderedImage(source,assets:assets,number:number) { return rendered }
+                try?await Task.sleep(nanoseconds:250_000_000)
+            }
+            return nil
+        }
         do {
             var request = URLRequest(url: remote); request.setValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36", forHTTPHeaderField: "User-Agent"); request.setValue(imageOnly ? "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8" : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",forHTTPHeaderField:"Accept");request.setValue("zh-CN,zh;q=0.9,en;q=0.8",forHTTPHeaderField:"Accept-Language");request.setValue(url,forHTTPHeaderField:"Referer"); let cookies=await browser.cookieHeader(for:remote); if !cookies.isEmpty{request.setValue(cookies,forHTTPHeaderField:"Cookie")}
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -493,6 +521,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
                 let downloaded=isHLS ? await localHLS(source,assets:assets,number:index + 1) : await localAsset(source, assets:assets, number:index + 1, imageOnly:asset.kind == "image")
                 let local=isVideo ? downloaded.flatMap{cacheVideo(local:$0,folder:dir,pageURL:url,ordinal:videoOrdinal)} : downloaded
                 if let local { fragment = replaceResourceReference(fragment,source:source,local:local); saved += 1 }
+                else if asset.kind == "image" { fragment = replaceResourceReference(fragment,source:source,local:"") }
                 else if isVideo { throw NSError(domain:"WebOfflineSaver",code:1,userInfo:[NSLocalizedDescriptionKey:"视频资源未能下载，已取消保存以避免生成伪离线网页。"]) }
             }
             let file=dir.appendingPathComponent("index.html"),item=Item(id:id,title:page.title.isEmpty ? host : page.title,url:url,file:file.path,groupID:nil)
