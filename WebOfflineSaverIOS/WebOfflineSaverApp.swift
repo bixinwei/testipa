@@ -298,7 +298,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             try await browser.prepareRenderedImages()
             let assets=destination.deletingLastPathComponent()
             guard let relative=await renderedImage(source,assets:assets,number:9999) else { log("[程序] 重新渲染保存失败：页面没有可捕获的图片像素。");return false }
-            let temporary=assets.appendingPathComponent(relative.replacingOccurrences(of:"assets/",""))
+            let temporary=assets.appendingPathComponent(relative.replacingOccurrences(of:"assets/",with:""))
             guard fm.fileExists(atPath:temporary.path) else{return false}
             try?fm.removeItem(at:destination)
             try fm.moveItem(at:temporary,to:destination)
