@@ -68,6 +68,15 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         """
         _ = try await asyncJS(script)
     }
+    /// Some sites replace lazy image URLs after their initial decode callback.
+    /// Give a manually requested image a full ten seconds on screen before capture.
+    func waitForRenderedImage(_ source: String) async {
+        guard let encoded=try?JSONEncoder().encode(source),let literal=String(data:encoded,encoding:.utf8) else{return}
+        _ = try?await js("""
+        (()=>{const wanted=\(literal),same=value=>{if(!value)return false;try{const a=new URL(value,document.baseURI),b=new URL(wanted,document.baseURI);return a.origin===b.origin&&a.pathname===b.pathname}catch(_){return value===wanted}};const image=[...document.images].find(item=>[item.currentSrc,item.src,item.getAttribute('data-xkrkllgl'),item.getAttribute('data-original'),item.getAttribute('data-lazy-src'),item.getAttribute('data-src')].some(same));if(image){image.loading='eager';image.scrollIntoView({block:'center',inline:'center'});return true}return false})()
+        """)
+        try?await Task.sleep(nanoseconds:10_000_000_000)
+    }
     /// Canvas export is blocked by some image CDNs.  WKWebView's native snapshot
     /// captures the pixels already rendered by WebKit and therefore does not use
     /// the image URL again or depend on that CDN's CORS policy.
@@ -344,6 +353,8 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
                 try await browser.prepareRenderedImages()
             }
             let assets=destination.deletingLastPathComponent()
+            log("[程序] 正在等待图片渲染完成（最多 10 秒）…")
+            await browser.waitForRenderedImage(original)
             guard let relative=await renderedImage(original,assets:assets,number:9999) else { log("[程序] 重新渲染保存失败：页面没有可捕获的图片像素。");return false }
             let temporary=assets.appendingPathComponent(relative.replacingOccurrences(of:"assets/",with:""))
             guard fm.fileExists(atPath:temporary.path) else{return false}
