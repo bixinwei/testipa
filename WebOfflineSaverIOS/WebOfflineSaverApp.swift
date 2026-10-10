@@ -27,7 +27,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
     let view: WKWebView; var wait: CheckedContinuation<Void,Error>?; var completedURL: URL?
     override init(){let c=WKWebViewConfiguration();c.websiteDataStore = .default();c.defaultWebpagePreferences.allowsContentJavaScript=true;view=WKWebView(frame:.zero,configuration:c);super.init();view.navigationDelegate=self}
     func open(_ s:String){if let u=URL(string:s){completedURL=nil;view.load(URLRequest(url:u))}}
-    func load(_ s:String) async throws {guard let u=URL(string:s)else{throw URLError(.badURL)};if let completedURL,completedURL.absoluteString == u.absoluteString{return};try await withCheckedThrowingContinuation{(c:CheckedContinuation<Void,Error>) in wait=c;view.load(URLRequest(url:u))}}
+    func load(_ s:String, forceReload:Bool=false) async throws {guard let u=URL(string:s)else{throw URLError(.badURL)};if !forceReload,let completedURL,completedURL.absoluteString == u.absoluteString{return};try await withCheckedThrowingContinuation{(c:CheckedContinuation<Void,Error>) in wait=c;if forceReload,view.url?.absoluteString == u.absoluteString{view.reload()}else{view.load(URLRequest(url:u))}}}
     func js(_ s:String) async throws->Any {try await withCheckedThrowingContinuation{c in view.evaluateJavaScript(s){v,e in if let e{c.resume(throwing:e)}else{c.resume(returning:v as Any)}}}}
     func asyncJS(_ script:String) async throws -> Any {
         try await withCheckedThrowingContinuation { continuation in
@@ -68,13 +68,10 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         """
         _ = try await asyncJS(script)
     }
-    /// Some sites replace lazy image URLs after their initial decode callback.
-    /// Give a manually requested image a full ten seconds on screen before capture.
-    func waitForRenderedImage(_ source: String) async {
-        guard let encoded=try?JSONEncoder().encode(source),let literal=String(data:encoded,encoding:.utf8) else{return}
-        _ = try?await js("""
-        (()=>{const wanted=\(literal),same=value=>{if(!value)return false;try{const a=new URL(value,document.baseURI),b=new URL(wanted,document.baseURI);return a.origin===b.origin&&a.pathname===b.pathname}catch(_){return value===wanted}};const image=[...document.images].find(item=>[item.currentSrc,item.src,item.getAttribute('data-xkrkllgl'),item.getAttribute('data-original'),item.getAttribute('data-lazy-src'),item.getAttribute('data-src')].some(same));if(image){image.loading='eager';image.scrollIntoView({block:'center',inline:'center'});return true}return false})()
-        """)
+    /// Wait before structural extraction: many pages assign their real lazy-image
+    /// URLs only after their load event and follow-up JavaScript have run.
+    func waitForPageSettle() async {
+        _ = try?await js("(()=>{document.querySelectorAll('img').forEach(image=>{image.loading='eager';const source=image.getAttribute('data-xkrkllgl')||image.getAttribute('data-original')||image.getAttribute('data-lazy-src')||image.getAttribute('data-src');if(source)image.src=new URL(source,document.baseURI).href});return true})()")
         try?await Task.sleep(nanoseconds:10_000_000_000)
     }
     /// Canvas export is blocked by some image CDNs.  WKWebView's native snapshot
@@ -324,7 +321,8 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
     }
     func legacyImageSource(for item: Item, ordinal: Int) async throws -> String? {
         url=item.url
-        try await browser.load(item.url)
+        try await browser.load(item.url,forceReload:true)
+        await browser.waitForPageSettle()
         try await browser.prepareRenderedImages()
         let skeleton=try await browser.js("(()=>[...document.querySelectorAll('main,article,section,div')].slice(0,500).map(x=>'<'+x.tagName.toLowerCase()+' id=\"'+(x.id||'')+'\" class=\"'+(x.className||'')+'\">').join('\\n'))()") as? String ?? ""
         let host=URL(string:item.url)?.host ?? "site"
@@ -349,12 +347,12 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
                 original=recovered
             } else {
                 url=item.url
-                try await browser.load(item.url)
+                try await browser.load(item.url,forceReload:true)
+                await browser.waitForPageSettle()
                 try await browser.prepareRenderedImages()
             }
             let assets=destination.deletingLastPathComponent()
-            log("[程序] 正在等待图片渲染完成（最多 10 秒）…")
-            await browser.waitForRenderedImage(original)
+            log("[程序] 页面已稳定，开始保存渲染图片。")
             guard let relative=await renderedImage(original,assets:assets,number:9999) else { log("[程序] 重新渲染保存失败：页面没有可捕获的图片像素。");return false }
             let temporary=assets.appendingPathComponent(relative.replacingOccurrences(of:"assets/",with:""))
             guard fm.fileExists(atPath:temporary.path) else{return false}
