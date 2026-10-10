@@ -544,11 +544,31 @@ final class ImagePreviewController: UIViewController, UIScrollViewDelegate {
     init(imageURL: URL) { self.imageURL=imageURL;super.init(nibName:nil,bundle:nil) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func viewDidLoad() {
-        super.viewDidLoad();modalPresentationStyle=.fullScreen;view.backgroundColor=.black
-        scrollView.frame=view.bounds;scrollView.autoresizingMask=[.flexibleWidth,.flexibleHeight];scrollView.minimumZoomScale=1;scrollView.maximumZoomScale=5;scrollView.delegate=self;scrollView.backgroundColor=.black;view.addSubview(scrollView)
-        imageView.frame=scrollView.bounds;imageView.autoresizingMask=[.flexibleWidth,.flexibleHeight];imageView.contentMode=.scaleAspectFit;imageView.backgroundColor=.black;imageView.image=UIImage(contentsOfFile:imageURL.path);scrollView.addSubview(imageView)
-        let close=UIButton(type:.close);close.tintColor=.white;close.frame=CGRect(x:18,y:56,width:36,height:36);close.autoresizingMask=[.flexibleRightMargin,.flexibleBottomMargin];close.addTarget(self,action:#selector(dismissPreview),for:.touchUpInside);view.addSubview(close)
-        let doubleTap=UITapGestureRecognizer(target:self,action:#selector(toggleZoom));doubleTap.numberOfTapsRequired=2;scrollView.addGestureRecognizer(doubleTap)
+        super.viewDidLoad()
+        modalPresentationStyle = .fullScreen
+        view.backgroundColor = .black
+        scrollView.frame = view.bounds
+        scrollView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        scrollView.minimumZoomScale = 1
+        scrollView.maximumZoomScale = 5
+        scrollView.delegate = self
+        scrollView.backgroundColor = .black
+        view.addSubview(scrollView)
+        imageView.frame = scrollView.bounds
+        imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        imageView.contentMode = .scaleAspectFit
+        imageView.backgroundColor = .black
+        imageView.image = UIImage(contentsOfFile:imageURL.path)
+        scrollView.addSubview(imageView)
+        let close = UIButton(type: .close)
+        close.tintColor = .white
+        close.frame = CGRect(x: 18, y: 56, width: 36, height: 36)
+        close.autoresizingMask = [.flexibleRightMargin, .flexibleBottomMargin]
+        close.addTarget(self, action: #selector(dismissPreview), for: .touchUpInside)
+        view.addSubview(close)
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(toggleZoom))
+        doubleTap.numberOfTapsRequired = 2
+        scrollView.addGestureRecognizer(doubleTap)
     }
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
     @objc func dismissPreview(){dismiss(animated:true)}
