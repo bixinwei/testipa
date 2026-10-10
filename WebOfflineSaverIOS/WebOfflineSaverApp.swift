@@ -24,10 +24,8 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
 
 @MainActor final class Browser: NSObject, ObservableObject, WKNavigationDelegate {
     let view: WKWebView; var wait: CheckedContinuation<Void,Error>?; var completedURL: URL?
-    @Published var selectionMode=false
-    @Published var markedCount=0
     override init(){let c=WKWebViewConfiguration();c.websiteDataStore = .default();c.defaultWebpagePreferences.allowsContentJavaScript=true;view=WKWebView(frame:.zero,configuration:c);super.init();view.navigationDelegate=self}
-    func open(_ s:String){if let u=URL(string:s){selectionMode=false;markedCount=0;completedURL=nil;view.load(URLRequest(url:u))}}
+    func open(_ s:String){if let u=URL(string:s){completedURL=nil;view.load(URLRequest(url:u))}}
     func load(_ s:String) async throws {guard let u=URL(string:s)else{throw URLError(.badURL)};if let completedURL,completedURL.absoluteString == u.absoluteString{return};try await withCheckedThrowingContinuation{(c:CheckedContinuation<Void,Error>) in wait=c;view.load(URLRequest(url:u))}}
     func js(_ s:String) async throws->Any {try await withCheckedThrowingContinuation{c in view.evaluateJavaScript(s){v,e in if let e{c.resume(throwing:e)}else{c.resume(returning:v as Any)}}}}
     func asyncJS(_ script:String) async throws -> Any {
@@ -39,25 +37,6 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
                 }
             }
         }
-    }
-    func refreshMarkedCount() async {
-        markedCount=(try?await js("document.querySelectorAll('.wos-manual-selected').length")) as? Int ?? 0
-    }
-    func markedStructure() async throws -> String {
-        let script="""
-        (()=>[...document.querySelectorAll('.wos-manual-selected')].filter(node=>!node.parentElement?.closest('.wos-manual-selected')).map(node=>'<'+node.tagName.toLowerCase()+' id="'+(node.id||'')+'" class="'+(node.className||'')+'">').join('\\n'))()
-        """
-        return try await js(script) as? String ?? ""
-    }
-    func setSelectionMode(_ enabled: Bool) async {
-        let script="""
-        (()=>{const cls='wos-manual-selected',styleID='wos-manual-selection-style';let old=document.getElementById(styleID);if(!old){const style=document.createElement('style');style.id=styleID;style.textContent='.'+cls+'{outline:3px solid #1677ff!important;background-color:rgba(22,119,255,.16)!important}';document.head.append(style)}if(window.__wosSelectionHandler){document.removeEventListener('click',window.__wosSelectionHandler,true);window.__wosSelectionHandler=null}if(\(enabled ? "true" : "false")){window.__wosSelectionHandler=event=>{const node=event.target.closest('body *');if(!node||node.id===styleID)return;event.preventDefault();event.stopImmediatePropagation();node.classList.toggle(cls)};document.addEventListener('click',window.__wosSelectionHandler,true)}return document.querySelectorAll('.'+cls).length})()
-        """
-        markedCount=(try?await js(script)) as? Int ?? 0;selectionMode=enabled
-    }
-    func clearManualSelection() async {
-        _=try?await js("(()=>{document.querySelectorAll('.wos-manual-selected').forEach(node=>node.classList.remove('wos-manual-selected'));return true})()")
-        markedCount=0
     }
     func cookieHeader(for url: URL) async -> String {
         await withCheckedContinuation { continuation in
@@ -192,22 +171,21 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             models=list; if !list.contains(model){model=list[0]}; log("[程序] 已刷新模型列表，共 \(list.count) 个模型。")
         } catch { log("[程序] 刷新模型列表失败：\(error.localizedDescription)") }
     }
-    func getPlan(host:String,skeleton:String,manualSelection:Bool) async throws->Plan {let k="wo.plan.\(host)";if !force,!manualSelection,let d=UserDefaults.standard.data(forKey:k),let cached=try?JSONDecoder().decode(CachedPlan.self,from:d),cached.version == 2 {log("[程序] 复用 \(host) 已保存的网页结构，不调用 AI。");return cached.plan};log(manualSelection ? "[AI] 正在根据手动标记的主体结构识别…" : "[AI] 正在识别标题与主体区域…");let prompt="分析网页结构，不要输出正文。返回 JSON：contentSelector（标题 CSS selector 不在此；只包住正文/图片/视频的最小 CSS selector）、titleSelector（标题 CSS selector）、excludes（需从主体内删除的 CSS selector 数组）。必须排除广告、推广按钮、菜单、分享控件、上一篇下一篇、标签、下载推广、相关推荐、评论、侧栏和页脚。不要用一个包含这些区域的大容器代替排除规则。\(manualSelection ? "用户已手动标记主体范围；以下只包含这些标记节点，请只依据它们识别正文。" : "")URL=\(url)\n结构：\(skeleton)";var r=URLRequest(url:URL(string:api.trimmingCharacters(in:CharacterSet(charactersIn:"/"))+"/chat/completions")!);r.httpMethod="POST";r.setValue("Bearer \(key)",forHTTPHeaderField:"Authorization");r.setValue("application/json",forHTTPHeaderField:"Content-Type");r.httpBody=try JSONSerialization.data(withJSONObject:["model":model,"temperature":0.1,"response_format":["type":"json_object"],"messages":[["role":"user","content":prompt]]]);let(d,_)=try await URLSession.shared.data(for:r);let o=try JSONSerialization.jsonObject(with:d)as![String:Any];let s=(((o["choices"]as?[[String:Any]])?.first?["message"]as?[String:Any])?["content"]as?String) ?? "{}";let p=try JSONDecoder().decode(Plan.self,from:Data(s.utf8));if !manualSelection { UserDefaults.standard.set(try JSONEncoder().encode(CachedPlan(version:2,plan:p)),forKey:k) };return p}
+    func getPlan(host:String,skeleton:String,exclusionHints:String="",forceFresh:Bool=false) async throws->Plan {let k="wo.plan.\(host)";if !force,!forceFresh,let d=UserDefaults.standard.data(forKey:k),let cached=try?JSONDecoder().decode(CachedPlan.self,from:d),cached.version == 3 {log("[程序] 复用 \(host) 已保存的网页结构，不调用 AI。");return cached.plan};log(exclusionHints.isEmpty ? "[AI] 正在识别标题与主体区域…" : "[AI] 正在根据非主体标记修正网页结构…");let hint=exclusionHints.isEmpty ? "" : "\n用户在已下载预览中标记了以下非主体 DOM 片段。必须在新的 excludes 中排除与这些片段对应的区域：\n\(exclusionHints)\n";let prompt="分析网页结构，不要输出正文。返回 JSON：contentSelector（标题 CSS selector 不在此；只包住正文/图片/视频的最小 CSS selector）、titleSelector（标题 CSS selector）、excludes（需从主体内删除的 CSS selector 数组）。必须排除广告、推广按钮、菜单、分享控件、上一篇下一篇、标签、下载推广、相关推荐、评论、侧栏和页脚。不要用一个包含这些区域的大容器代替排除规则。\(hint)URL=\(url)\n完整网页结构：\(skeleton)";var r=URLRequest(url:URL(string:api.trimmingCharacters(in:CharacterSet(charactersIn:"/"))+"/chat/completions")!);r.httpMethod="POST";r.setValue("Bearer \(key)",forHTTPHeaderField:"Authorization");r.setValue("application/json",forHTTPHeaderField:"Content-Type");r.httpBody=try JSONSerialization.data(withJSONObject:["model":model,"temperature":0.1,"response_format":["type":"json_object"],"messages":[["role":"user","content":prompt]]]);let(d,_)=try await URLSession.shared.data(for:r);let o=try JSONSerialization.jsonObject(with:d)as![String:Any];let s=(((o["choices"]as?[[String:Any]])?.first?["message"]as?[String:Any])?["content"]as?String) ?? "{}";let p=try JSONDecoder().decode(Plan.self,from:Data(s.utf8));UserDefaults.standard.set(try JSONEncoder().encode(CachedPlan(version:3,plan:p)),forKey:k);return p}
     func validImage(_ data: Data) -> Bool {
         let bytes=[UInt8](data.prefix(16))
         return bytes.starts(with:[0xFF,0xD8,0xFF]) || bytes.starts(with:[0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A]) || bytes.starts(with:[0x47,0x49,0x46,0x38]) || (bytes.count >= 12 && Array(bytes[0..<4]) == [0x52,0x49,0x46,0x46] && Array(bytes[8..<12]) == [0x57,0x45,0x42,0x50]) || (bytes.count >= 12 && String(bytes:bytes[4..<12],encoding:.ascii)?.contains("ftypavif") == true)
     }
+    func imageRuleKeys(_ host: String?, kind: String) -> [String] { guard let host else{return []};let parts=host.lowercased().split(separator:".");let root=parts.count >= 2 ? parts.suffix(2).joined(separator:".") : host.lowercased();return ["\(kind):\(host.lowercased())","\(kind):\(root)"] }
     func shouldUseRenderedImage(_ source: String) -> Bool {
-        let imageHost=URL(string:source)?.host?.lowercased()
-        let pageHost=URL(string:url)?.host?.lowercased()
-        return (imageHost.map{"image:\($0)"}.map{renderedImageRules.contains($0)} ?? false) || (pageHost.map{"page:\($0)"}.map{renderedImageRules.contains($0)} ?? false)
+        let imageKeys=imageRuleKeys(URL(string:source)?.host,kind:"image")
+        let pageKeys=imageRuleKeys(URL(string:url)?.host,kind:"page")
+        return imageKeys.contains(where:renderedImageRules.contains) || pageKeys.contains(where:renderedImageRules.contains)
     }
     func rememberRenderedImageRule(_ source: String) {
-        let imageHost=URL(string:source)?.host?.lowercased()
-        let pageHost=URL(string:url)?.host?.lowercased()
         let previous=renderedImageRules.count
-        if let imageHost { renderedImageRules.insert("image:\(imageHost)") }
-        if let pageHost { renderedImageRules.insert("page:\(pageHost)") }
+        imageRuleKeys(URL(string:source)?.host,kind:"image").forEach{renderedImageRules.insert($0)}
+        imageRuleKeys(URL(string:url)?.host,kind:"page").forEach{renderedImageRules.insert($0)}
         guard renderedImageRules.count != previous else { return }
         UserDefaults.standard.set(Array(renderedImageRules).sorted(),forKey:"wo.rendered.image.rules")
         log("[程序] 已记住该网页的图片需要从已渲染页面保存。")
@@ -218,7 +196,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         // Return one rendered image at a time.  Returning every canvas together
         // with the article HTML exceeds WebKit's JS bridge response limit.
         let script="""
-        (()=>{const wanted=\(literal);const image=[...document.images].find(x=>[x.currentSrc,x.src,x.getAttribute('data-xkrkllgl'),x.getAttribute('data-original'),x.getAttribute('data-lazy-src'),x.getAttribute('data-src')].includes(wanted));if(!image)return null;try{const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;if(!canvas.width||!canvas.height)return null;canvas.getContext('2d').drawImage(image,0,0);return canvas.toDataURL('image/png')}catch(_){return null}})()
+        (()=>{const wanted=\(literal),same=(value=>{if(!value)return false;if(value===wanted)return true;try{const a=new URL(value,document.baseURI),b=new URL(wanted,document.baseURI);return a.origin===b.origin&&a.pathname===b.pathname}catch(_){return false}});const image=[...document.images].find(x=>[x.currentSrc,x.src,x.getAttribute('data-xkrkllgl'),x.getAttribute('data-original'),x.getAttribute('data-lazy-src'),x.getAttribute('data-src')].some(same));if(!image)return null;try{const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;if(!canvas.width||!canvas.height)return null;canvas.getContext('2d').drawImage(image,0,0);return canvas.toDataURL('image/png')}catch(_){return null}})()
         """
         guard let value=try?await browser.js(script),let raw=value as? String,let comma=raw.firstIndex(of:","),let data=Data(base64Encoded:String(raw[raw.index(after:comma)...])),validImage(data) else{return nil}
         let name=String(format:"%03d.png",number);try?data.write(to:assets.appendingPathComponent(name),options:.atomic);return "assets/\(name)"
@@ -231,7 +209,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             let name=String(format:"%03d.%@",number,ext); try? data.write(to:assets.appendingPathComponent(name),options:.atomic); return "assets/\(name)"
         }
         guard let remote = URL(string: source), ["http", "https"].contains(remote.scheme?.lowercased() ?? "") else { return nil }
-        if imageOnly && shouldUseRenderedImage(source) { return await renderedImage(source,assets:assets,number:number) }
+        if imageOnly && shouldUseRenderedImage(source),let rendered=await renderedImage(source,assets:assets,number:number) { return rendered }
         do {
             var request = URLRequest(url: remote); request.setValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36", forHTTPHeaderField: "User-Agent"); request.setValue(imageOnly ? "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8" : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",forHTTPHeaderField:"Accept");request.setValue("zh-CN,zh;q=0.9,en;q=0.8",forHTTPHeaderField:"Accept-Language");request.setValue(url,forHTTPHeaderField:"Referer"); let cookies=await browser.cookieHeader(for:remote); if !cookies.isEmpty{request.setValue(cookies,forHTTPHeaderField:"Cookie")}
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -427,18 +405,16 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             }
         }
     }
-    func work(deferVideos: Bool=false) async -> SaveOutcome? {
+    func work(deferVideos: Bool=false,exclusionHints:String="",forceFreshPlan:Bool=false) async -> SaveOutcome? {
         guard !url.isEmpty, !key.isEmpty else { log("[程序] 请填写网页地址和 API Key。"); return nil }
         guard !bookmarkStopRequested, !Task.isCancelled else { return nil }
         var stage="初始化"
         do {
-            saveConfig(); stage="读取已验证网页";let existingMarked=try await browser.markedStructure();if existingMarked.isEmpty { log("[程序] 正在读取网页…");try await browser.load(url) } else { log("[程序] 将使用验证浏览器中手动标记的主体内容。") }
+            saveConfig(); stage="读取已验证网页";log("[程序] 正在读取网页…");try await browser.load(url)
             stage="等待正文图片渲染";try await browser.prepareRenderedImages()
             stage="生成网页结构骨架"
-            let markedSkeleton=try await browser.markedStructure()
-            let manualSelection = !markedSkeleton.isEmpty
-            let skeleton = manualSelection ? markedSkeleton : (try await browser.js("(()=>[...document.querySelectorAll('main,article,section,div')].slice(0,500).map(x=>'<'+x.tagName.toLowerCase()+' id=\"'+(x.id||'')+'\" class=\"'+(x.className||'')+'\">').join('\\n'))()") as? String ?? "")
-            let host = URL(string:url)?.host ?? "site"; stage="AI 主体结构识别";let p = try await getPlan(host:host, skeleton:skeleton,manualSelection:manualSelection)
+            let skeleton = try await browser.js("(()=>[...document.querySelectorAll('main,article,section,div')].slice(0,500).map(x=>'<'+x.tagName.toLowerCase()+' id=\"'+(x.id||'')+'\" class=\"'+(x.className||'')+'\">').join('\\n'))()") as? String ?? ""
+            let host = URL(string:url)?.host ?? "site"; stage="AI 主体结构识别";let p = try await getPlan(host:host, skeleton:skeleton,exclusionHints:exclusionHints,forceFresh:forceFreshPlan)
             let q = String(data:try JSONEncoder().encode(p.contentSelector),encoding:.utf8)!; let ex = String(data:try JSONEncoder().encode(p.excludes),encoding:.utf8)!; let ti = String(data:try JSONEncoder().encode(p.titleSelector ?? ""),encoding:.utf8)!
             stage="读取当前播放器资源";log("[程序] 正在从已验证浏览器读取视频播放资源…")
             let mediaJSON=String(data:try JSONEncoder().encode(try await browser.currentPageMediaURLs()),encoding:.utf8)!
@@ -448,10 +424,8 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             """
             let script = """
             (()=>{
-              const marked=[...document.querySelectorAll('.wos-manual-selected')].filter(node=>!node.parentElement?.closest('.wos-manual-selected'));
-              const node=marked.length?marked[0]:document.querySelector(\(q)); if(!node)return null;
-              const root=marked.length?document.createElement('div'):node.cloneNode(true), excludes=\(ex), media=\(mediaJSON);
-              if(marked.length)marked.forEach(node=>root.append(node.cloneNode(true)));
+              const node=document.querySelector(\(q)); if(!node)return null;
+              const root=node.cloneNode(true), excludes=\(ex), media=\(mediaJSON);
               const absolute=value=>{try{return new URL(value,document.baseURI).href}catch(_){return value}};
               const matchesMP4=value=>/\\.mp4(?:[?#]|$)|douyinvod|toutiaovod|bytecdn|videocdn|\\/video\\/(?:play|stream)/i.test(value);
               const matchesHLS=value=>/\\.m3u8(?:[?#]|$)/i.test(value);
@@ -544,6 +518,23 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         for item in items where ids.contains(item.id) { try?fm.removeItem(at:URL(fileURLWithPath:item.file).deletingLastPathComponent()) }
         items.removeAll{ids.contains($0.id)};persist();_ = cleanupOrphanedLibrary();log("[程序] 已删除 \(ids.count) 个已下载网页及对应资源。")
     }
+    func reparseExcluding(_ item: Item, hints: String, onReplacement: @escaping (Item) -> Void = { _ in }) {
+        guard !downloading else { return }
+        guard !hints.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,hints != "[]" else { log("[程序] 请先标记需要剔除的非主体内容。");return }
+        Task {
+            bookmarkStopRequested=false;url=item.url;downloading=true;downloadStatus="正在按非主体标记重新识别网页…"
+            defer { downloading=false;downloadStatus="" }
+            guard let outcome=await work(deferVideos:deferVideoDownloads,exclusionHints:hints,forceFreshPlan:true) else { return }
+            guard let replacement=items.firstIndex(where:{$0.id == outcome.itemID}) else { return }
+            items[replacement].groupID=item.groupID
+            let replacementItem=items[replacement]
+            if let previous=items.firstIndex(where:{$0.id == item.id}) { try?fm.removeItem(at:URL(fileURLWithPath:items[previous].file).deletingLastPathComponent());items.remove(at:previous) }
+            if let jobIndex=bookmarkJobs.firstIndex(where:{$0.itemID == item.id}) { bookmarkJobs[jobIndex].itemID=outcome.itemID;bookmarkJobs[jobIndex].videoSources=outcome.videoSources;bookmarkJobs[jobIndex].downloadedVideoSources=[] }
+            else if deferVideoDownloads,!outcome.videoSources.isEmpty { bookmarkJobs.append(BookmarkJob(id:UUID(),url:item.url,status:"done",videoSources:outcome.videoSources,downloadedVideoSources:[],itemID:outcome.itemID,groupID:item.groupID)) }
+            persist();persistBookmarkQueue();_ = cleanupOrphanedLibrary();log("[程序] 已按非主体标记重新识别并替换《\(item.title)》。")
+            onReplacement(replacementItem)
+        }
+    }
     func persist(){try?fm.createDirectory(at:root,withIntermediateDirectories:true);try?JSONEncoder().encode(items).write(to:root.appendingPathComponent("catalog.json"))}
 }
 struct Home:View{
@@ -621,7 +612,7 @@ struct DownloadedTab:View{
     var body:some View{NavigationStack{
         List(selection:$selectedItems){
             Section("归档筛选"){Picker("显示",selection:$groupFilter){Text("全部网页").tag("all");Text("未分组").tag("none");ForEach(s.archiveGroups){group in Text(group.name).tag(group.id.uuidString)}}.onChange(of:groupFilter){_ in selectedItems.removeAll()}}
-            Section("已下载网页（\(visibleItems.count)）") { if visibleItems.isEmpty { Text("当前分组没有已下载网页。").foregroundStyle(.secondary) } else { ForEach(visibleItems){item in NavigationLink(destination:OfflinePreview(item:item)){Text(item.title).foregroundStyle(.primary)}.tag(item.id)} } }
+            Section("已下载网页（\(visibleItems.count)）") { if visibleItems.isEmpty { Text("当前分组没有已下载网页。").foregroundStyle(.secondary) } else { ForEach(visibleItems){item in NavigationLink(destination:OfflinePreview(item:item)){Text(item.title).foregroundStyle(.primary)}.tag(item.id)}.onDelete { offsets in s.deleteItems(Set(offsets.map{visibleItems[$0].id})) } } }
         }.navigationTitle("已下载").environment(\.editMode,$editMode).toolbar{
             ToolbarItemGroup(placement:.topBarLeading){Button(editMode.isEditing ? "完成" : "多选"){editMode=editMode.isEditing ? .inactive : .active;if !editMode.isEditing{selectedItems.removeAll()}};if editMode.isEditing{Button("全选"){selectedItems=Set(visibleItems.map{$0.id})}.disabled(visibleItems.isEmpty)}}
             ToolbarItem(placement:.topBarTrailing){Button("删除选中"){s.deleteItems(selectedItems);selectedItems.removeAll()}.disabled(selectedItems.isEmpty)}
@@ -664,44 +655,80 @@ struct BookmarkPreview: View {
 struct Web:UIViewRepresentable{@ObservedObject var browser:Browser;func makeUIView(context:Context)->WKWebView{browser.view};func updateUIView(_ v:WKWebView,context:Context){}}
 struct WebSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var browser: Browser
+    let browser: Browser
     var body: some View {
         NavigationStack {
             Web(browser: browser)
-                .navigationTitle(browser.selectionMode ? "点选要保存的主体内容" : "完成验证后返回")
+                .navigationTitle("完成验证后返回")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItemGroup(placement: .topBarLeading) {
-                        Button(browser.selectionMode ? "结束标记" : "标记主体") { Task { await browser.setSelectionMode(!browser.selectionMode) } }
-                        Button("清除标记") { Task { await browser.clearManualSelection() } }
-                    }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("完成验证") { Task { await browser.setSelectionMode(false);dismiss() } }
+                        Button("完成验证") { dismiss() }
                     }
                 }
-                .onAppear { Task { await browser.refreshMarkedCount() } }
         }
     }
 }
 struct OfflinePreview: View {
-    let item: Item
-    var body: some View { LocalWebView(file: URL(fileURLWithPath: item.file),title:item.title).navigationTitle(item.title).navigationBarTitleDisplayMode(.inline) }
+    @EnvironmentObject var s: Store
+    @State private var activeItem: Item
+    @State private var markingNonContent=false
+    @State private var collectGeneration=0
+    @State private var clearGeneration=0
+    init(item: Item) { _activeItem=State(initialValue:item) }
+    var body: some View {
+        LocalWebView(file: URL(fileURLWithPath: activeItem.file),title:activeItem.title,markingNonContent:$markingNonContent,collectGeneration:collectGeneration,clearGeneration:clearGeneration) { hints in
+            s.reparseExcluding(activeItem,hints:hints) { replacement in activeItem=replacement;markingNonContent=false }
+        }.id(activeItem.id)
+            .navigationTitle(markingNonContent ? "点选应剔除的内容" : activeItem.title).navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItemGroup(placement:.topBarTrailing) {
+                    Button { markingNonContent.toggle() } label: { Image(systemName:markingNonContent ? "minus.circle.fill" : "minus.circle") }.accessibilityLabel(markingNonContent ? "结束标记非主体" : "标记非主体")
+                    Button { collectGeneration += 1 } label: { Image(systemName:"paperplane.fill") }.accessibilityLabel("提交非主体标记并重新识别").disabled(s.downloading)
+                    Button { clearGeneration += 1 } label: { Image(systemName:"trash") }.accessibilityLabel("清除非主体标记")
+                }
+            }
+    }
 }
 struct LocalWebView: UIViewRepresentable {
     let file: URL
     let title: String
+    @Binding var markingNonContent: Bool
+    let collectGeneration: Int
+    let clearGeneration: Int
+    let onCollected: (String) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(owner:self) }
     func makeUIView(context: Context) -> WKWebView { let configuration=WKWebViewConfiguration();configuration.userContentController.add(context.coordinator,name:"offlineImage");let view=WKWebView(frame:.zero,configuration:configuration);view.navigationDelegate=context.coordinator;view.uiDelegate=context.coordinator;view.loadFileURL(file, allowingReadAccessTo:file.deletingLastPathComponent().deletingLastPathComponent());return view }
-    func updateUIView(_ view: WKWebView, context: Context) {}
+    func updateUIView(_ view: WKWebView, context: Context) { context.coordinator.onCollected=onCollected;context.coordinator.setExcludeMode(in:view,enabled:markingNonContent);if context.coordinator.lastClearGeneration != clearGeneration { context.coordinator.lastClearGeneration=clearGeneration;context.coordinator.clearExcluded(in:view) };if context.coordinator.lastCollectGeneration != collectGeneration { context.coordinator.lastCollectGeneration=collectGeneration;context.coordinator.collectExcluded(in:view) } }
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         let owner: LocalWebView
-        init(owner: LocalWebView) { self.owner=owner }
+        var onCollected: (String) -> Void
+        var excludeMode=false
+        var lastCollectGeneration=0
+        var lastClearGeneration=0
+        init(owner: LocalWebView) { self.owner=owner;self.onCollected=owner.onCollected }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard let encoded=try?JSONEncoder().encode(owner.title),let literal=String(data:encoded,encoding:.utf8) else{return}
             let script="""
-            (()=>{if(!document.getElementById('offline-page-title')){const title=document.createElement('h1');title.id='offline-page-title';title.textContent=\(literal);title.style.cssText='font-size:1.45em;line-height:1.35;margin:0 0 1em';document.body.prepend(title)}if(!document.getElementById('offline-image-style')){const style=document.createElement('style');style.id='offline-image-style';style.textContent='img{-webkit-touch-callout:none!important;-webkit-user-select:none!important;user-select:none!important}';document.head.append(style)}const send=(action,image)=>window.webkit.messageHandlers.offlineImage.postMessage({action:action,src:image.currentSrc||image.src});document.querySelectorAll('img').forEach(image=>{if(image.dataset.offlineGesture)return;image.dataset.offlineGesture='1';let hold=null,lastTap=0;image.addEventListener('contextmenu',event=>event.preventDefault());image.addEventListener('touchstart',()=>{hold=setTimeout(()=>send('menu',image),550)},{passive:true});image.addEventListener('touchmove',()=>{clearTimeout(hold)},{passive:true});image.addEventListener('touchcancel',()=>{clearTimeout(hold)},{passive:true});image.addEventListener('touchend',event=>{clearTimeout(hold);const now=Date.now();if(now-lastTap<300){event.preventDefault();send('preview',image);lastTap=0}else{lastTap=now}},{passive:false})})})()
+            (()=>{if(!document.getElementById('offline-page-title')){const title=document.createElement('h1');title.id='offline-page-title';title.textContent=\(literal);title.style.cssText='font-size:1.45em;line-height:1.35;margin:0 0 1em';document.body.prepend(title)}if(!document.getElementById('offline-image-style')){const style=document.createElement('style');style.id='offline-image-style';style.textContent='img{-webkit-touch-callout:none!important;-webkit-user-select:none!important;user-select:none!important}';document.head.append(style)}const send=(action,image)=>window.webkit.messageHandlers.offlineImage.postMessage({action:action,src:image.currentSrc||image.src});document.querySelectorAll('img').forEach(image=>{if(image.dataset.offlineGesture)return;image.dataset.offlineGesture='1';let hold=null,lastTap=0;image.addEventListener('contextmenu',event=>event.preventDefault());image.addEventListener('touchstart',()=>{if(window.__wosExcludeMode)return;hold=setTimeout(()=>send('menu',image),550)},{passive:true});image.addEventListener('touchmove',()=>{clearTimeout(hold)},{passive:true});image.addEventListener('touchcancel',()=>{clearTimeout(hold)},{passive:true});image.addEventListener('touchend',event=>{if(window.__wosExcludeMode)return;clearTimeout(hold);const now=Date.now();if(now-lastTap<300){event.preventDefault();send('preview',image);lastTap=0}else{lastTap=now}},{passive:false})})})()
             """
             webView.evaluateJavaScript(script)
+            setExcludeMode(in:webView,enabled:excludeMode)
+        }
+        func setExcludeMode(in webView: WKWebView, enabled: Bool) {
+            guard excludeMode != enabled || enabled else { return }
+            excludeMode=enabled
+            let script="""
+            (()=>{const cls='wos-exclude-selected',styleID='wos-exclude-selection-style';window.__wosExcludeMode=\(enabled ? "true" : "false");if(!document.getElementById(styleID)){const style=document.createElement('style');style.id=styleID;style.textContent='.'+cls+'{outline:3px solid #e5484d!important;background-color:rgba(229,72,77,.16)!important}';document.head.append(style)}if(window.__wosExcludeHandler){document.removeEventListener('click',window.__wosExcludeHandler,true);window.__wosExcludeHandler=null}if(\(enabled ? "true" : "false")){window.__wosExcludeHandler=event=>{const node=event.target.closest('body *');if(!node||node.id===styleID)return;event.preventDefault();event.stopImmediatePropagation();node.classList.toggle(cls)};document.addEventListener('click',window.__wosExcludeHandler,true)}return true})()
+            """
+            webView.evaluateJavaScript(script)
+        }
+        func clearExcluded(in webView: WKWebView) { webView.evaluateJavaScript("(()=>{document.querySelectorAll('.wos-exclude-selected').forEach(node=>node.classList.remove('wos-exclude-selected'));return true})()") }
+        func collectExcluded(in webView: WKWebView) {
+            let script="""
+            (()=>{const nodes=[...document.querySelectorAll('.wos-exclude-selected')].filter(node=>!node.parentElement?.closest('.wos-exclude-selected'));const describe=node=>({tag:node.tagName.toLowerCase(),id:node.id||'',classes:node.className||'',text:(node.innerText||'').trim().slice(0,500),html:node.outerHTML.slice(0,1600)});return JSON.stringify(nodes.map(describe)).slice(0,12000)})()
+            """
+            webView.evaluateJavaScript(script) { value,_ in guard let raw=value as? String,!raw.isEmpty else{return};DispatchQueue.main.async { self.onCollected(raw) } }
         }
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == "offlineImage",let payload=message.body as? [String:Any],let action=payload["action"] as? String,let raw=payload["src"] as? String,let imageURL=URL(string:raw),let webView=message.webView,let controller=topController(from:webView.window?.rootViewController) else{return}
