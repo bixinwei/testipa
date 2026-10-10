@@ -2,6 +2,7 @@ import SwiftUI
 import WebKit
 import CryptoKit
 import UniformTypeIdentifiers
+import UIKit
 
 @main struct WebOfflineSaverApp: App { @StateObject var store = Store(); var body: some Scene { WindowGroup { Home().environmentObject(store) } } }
 struct Plan: Codable { let contentSelector: String; let titleSelector: String?; let excludes: [String] }
@@ -154,6 +155,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         let bytes=[UInt8](data.prefix(16))
         return bytes.starts(with:[0xFF,0xD8,0xFF]) || bytes.starts(with:[0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A]) || bytes.starts(with:[0x47,0x49,0x46,0x38]) || (bytes.count >= 12 && Array(bytes[0..<4]) == [0x52,0x49,0x46,0x46] && Array(bytes[8..<12]) == [0x57,0x45,0x42,0x50]) || (bytes.count >= 12 && String(bytes:bytes[4..<12],encoding:.ascii)?.contains("ftypavif") == true)
     }
+    func htmlEscaped(_ value: String) -> String { value.replacingOccurrences(of:"&",with:"&amp;").replacingOccurrences(of:"<",with:"&lt;").replacingOccurrences(of:">",with:"&gt;").replacingOccurrences(of:"\"",with:"&quot;") }
     func renderedImage(_ source:String, assets:URL, number:Int) async -> String? {
         guard let encoded=try?JSONEncoder().encode(source),let literal=String(data:encoded,encoding:.utf8) else{return nil}
         // Return one rendered image at a time.  Returning every canvas together
@@ -338,9 +340,9 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
                 if let local { fragment = fragment.replacingOccurrences(of: source, with: local); saved += 1 }
                 else if isVideo { throw NSError(domain:"WebOfflineSaver",code:1,userInfo:[NSLocalizedDescriptionKey:"视频资源未能下载，已取消保存以避免生成伪离线网页。"]) }
             }
-            let file=dir.appendingPathComponent("index.html")
-            let pageHTML="<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><style>body{max-width:760px;margin:24px auto;padding:0 16px;font:17px/1.7 -apple-system}img,video{max-width:100%;height:auto}video{display:block;margin:14px auto}</style>\(fragment)"
-            try pageHTML.write(to:file,atomically:true,encoding:.utf8); let item=Item(id:id,title:page.title.isEmpty ? host : page.title,url:url,file:file.path);items.insert(item,at:0);persist();var message="[阶段] 已保存《\(item.title)》；已离线保存 \(saved) 个资源。";if deferVideos && !deferredVideos.isEmpty{message += "视频地址已保存，尚未下载。"};log(message); return SaveOutcome(itemID:id,videoSources:deferredVideos)
+            let file=dir.appendingPathComponent("index.html"),item=Item(id:id,title:page.title.isEmpty ? host : page.title,url:url,file:file.path)
+            let pageHTML="<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><style>body{max-width:760px;margin:24px auto;padding:0 16px;font:17px/1.7 -apple-system}.offline-page-title{font-size:1.45em;line-height:1.35;margin:0 0 1em}img,video{max-width:100%;height:auto}video{display:block;margin:14px auto}</style><h1 class='offline-page-title'>\(htmlEscaped(item.title))</h1>\(fragment)"
+            try pageHTML.write(to:file,atomically:true,encoding:.utf8);items.insert(item,at:0);persist();var message="[阶段] 已保存《\(item.title)》；已离线保存 \(saved) 个资源。";if deferVideos && !deferredVideos.isEmpty{message += "视频地址已保存，尚未下载。"};log(message); return SaveOutcome(itemID:id,videoSources:deferredVideos)
         } catch is CancellationError { log("[程序] 当前网页保存已安全暂停。"); return nil }
         catch { log("[程序] 保存失败（\(stage)）：\(error.localizedDescription)"); return nil }
     }
@@ -491,10 +493,40 @@ struct WebSheet: View {
 }
 struct OfflinePreview: View {
     let item: Item
-    var body: some View { LocalWebView(file: URL(fileURLWithPath: item.file)).navigationTitle(item.title).navigationBarTitleDisplayMode(.inline) }
+    var body: some View { LocalWebView(file: URL(fileURLWithPath: item.file),title:item.title).navigationTitle(item.title).navigationBarTitleDisplayMode(.inline) }
 }
 struct LocalWebView: UIViewRepresentable {
     let file: URL
-    func makeUIView(context: Context) -> WKWebView { let view=WKWebView(); view.loadFileURL(file, allowingReadAccessTo:file.deletingLastPathComponent().deletingLastPathComponent()); return view }
+    let title: String
+    func makeCoordinator() -> Coordinator { Coordinator(owner:self) }
+    func makeUIView(context: Context) -> WKWebView { let view=WKWebView();view.navigationDelegate=context.coordinator;view.uiDelegate=context.coordinator;view.loadFileURL(file, allowingReadAccessTo:file.deletingLastPathComponent().deletingLastPathComponent());return view }
     func updateUIView(_ view: WKWebView, context: Context) {}
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        let owner: LocalWebView
+        init(owner: LocalWebView) { self.owner=owner }
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard let encoded=try?JSONEncoder().encode(owner.title),let literal=String(data:encoded,encoding:.utf8) else{return}
+            webView.evaluateJavaScript("(()=>{if(document.getElementById('offline-page-title'))return;const title=document.createElement('h1');title.id='offline-page-title';title.textContent=\(literal);title.style.cssText='font-size:1.45em;line-height:1.35;margin:0 0 1em';document.body.prepend(title)})()")
+        }
+        func webView(_ webView: WKWebView, contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo, completionHandler: @escaping (UIContextMenuConfiguration?) -> Void) {
+            guard let imageURL=elementInfo.imageURL else { completionHandler(nil); return }
+            let export=UIAction(title:"导出图片",image:UIImage(systemName:"square.and.arrow.up")){[weak webView] _ in self.export(imageURL,from:webView) }
+            let rerender=UIAction(title:"重新渲染保存",image:UIImage(systemName:"arrow.clockwise")){[weak webView] _ in if let webView{self.rerender(imageURL,in:webView)} }
+            completionHandler(UIContextMenuConfiguration(identifier:nil,previewProvider:nil){_ in UIMenu(title:"图片",children:[export,rerender])})
+        }
+        func export(_ imageURL: URL, from webView: WKWebView?) {
+            guard let controller=topController(from:webView?.window?.rootViewController) else{return}
+            let sheet=UIActivityViewController(activityItems:[imageURL],applicationActivities:nil)
+            sheet.popoverPresentationController?.sourceView=webView
+            controller.present(sheet,animated:true)
+        }
+        func rerender(_ imageURL: URL, in webView: WKWebView) {
+            guard imageURL.isFileURL,let encoded=try?JSONEncoder().encode(imageURL.absoluteString),let literal=String(data:encoded,encoding:.utf8) else{return}
+            let script="""
+            (()=>{const target=\(literal),image=[...document.images].find(x=>x.currentSrc===target||x.src===target);if(!image||!image.naturalWidth||!image.naturalHeight)return null;try{const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;canvas.getContext('2d').drawImage(image,0,0);return canvas.toDataURL('image/png')}catch(_){return null}})()
+            """
+            webView.evaluateJavaScript(script){value,_ in guard let raw=value as? String,let comma=raw.firstIndex(of:","),let data=Data(base64Encoded:String(raw[raw.index(after:comma)...])) else{return};try?data.write(to:imageURL,options:.atomic);webView.reload()}
+        }
+        func topController(from controller: UIViewController?) -> UIViewController? { if let presented=controller?.presentedViewController{return topController(from:presented)};if let navigation=controller as? UINavigationController{return topController(from:navigation.visibleViewController)};if let tab=controller as? UITabBarController{return topController(from:tab.selectedViewController)};return controller }
+    }
 }
