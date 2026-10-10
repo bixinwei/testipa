@@ -6,7 +6,7 @@ import UIKit
 
 @main struct WebOfflineSaverApp: App { @StateObject var store = Store(); var body: some Scene { WindowGroup { Home().environmentObject(store) } } }
 struct Plan: Codable { let contentSelector: String; let titleSelector: String?; let excludes: [String] }
-struct CachedPlan: Codable { let version: Int; let plan: Plan }
+struct CachedPlan: Codable { let version: Int; let plan: Plan; let promptSignature: String? }
 struct Item: Codable, Identifiable, Hashable { let id: UUID; let title, url, file: String; var groupID: UUID? }
 struct AssetRef: Codable { let url: String; let kind: String }
 struct CapturedPage: Decodable { let title: String; let html: String; let resources: [AssetRef]; let selectedVideo: String?; let missingVideo: Bool? }
@@ -21,6 +21,7 @@ struct BookmarkJob: Codable, Identifiable {
 }
 struct ArchiveGroup: Codable, Identifiable, Hashable { let id: UUID; var name: String }
 struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
+let defaultAnalysisPrompt="分析网页结构，不要输出正文。返回 JSON：contentSelector（标题 CSS selector 不在此；只包住正文/图片/视频的最小 CSS selector）、titleSelector（标题 CSS selector）、excludes（需从主体内删除的 CSS selector 数组）。必须排除广告、推广按钮、菜单、分享控件、上一篇下一篇、标签、下载推广、相关推荐、评论、侧栏和页脚。不要用一个包含这些区域的大容器代替排除规则。"
 
 @MainActor final class Browser: NSObject, ObservableObject, WKNavigationDelegate {
     let view: WKWebView; var wait: CheckedContinuation<Void,Error>?; var completedURL: URL?
@@ -77,6 +78,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
     @Published var model=UserDefaults.standard.string(forKey:"wo.model") ?? "deepseek-chat"
     @Published var force=UserDefaults.standard.bool(forKey:"wo.force")
     @Published var deferVideoDownloads=UserDefaults.standard.object(forKey:"wo.defer.videos") == nil ? true : UserDefaults.standard.bool(forKey:"wo.defer.videos")
+    @Published var analysisPrompt=UserDefaults.standard.string(forKey:"wo.analysis.prompt") ?? defaultAnalysisPrompt
     @Published var bookmarkDomains=UserDefaults.standard.string(forKey:"wo.bookmark.domains") ?? ""
     @Published var browserShown = false
     @Published var logs:[String]=[]
@@ -98,7 +100,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
     var mediaCache:URL{root.appendingPathComponent("MediaCache",isDirectory:true)}
     init(){if let d=try?Data(contentsOf:root.appendingPathComponent("catalog.json")){items=(try?JSONDecoder().decode([Item].self,from:d)) ?? []};if let d=UserDefaults.standard.data(forKey:"wo.bookmark.queue"){bookmarkJobs=(try?JSONDecoder().decode([BookmarkJob].self,from:d)) ?? []};if let d=UserDefaults.standard.data(forKey:"wo.archive.groups"){archiveGroups=(try?JSONDecoder().decode([ArchiveGroup].self,from:d)) ?? []};_ = cleanupOrphanedLibrary()}
     func log(_ x:String){logs.append(x);if logs.count>50{logs.removeFirst(logs.count-50)}}
-    func saveConfig(){UserDefaults.standard.set(url,forKey:"wo.url");UserDefaults.standard.set(key,forKey:"wo.key");UserDefaults.standard.set(api,forKey:"wo.api");UserDefaults.standard.set(model,forKey:"wo.model");UserDefaults.standard.set(force,forKey:"wo.force");UserDefaults.standard.set(deferVideoDownloads,forKey:"wo.defer.videos");UserDefaults.standard.set(bookmarkDomains,forKey:"wo.bookmark.domains");log("[程序] 配置已保存。")}
+    func saveConfig(){UserDefaults.standard.set(url,forKey:"wo.url");UserDefaults.standard.set(key,forKey:"wo.key");UserDefaults.standard.set(api,forKey:"wo.api");UserDefaults.standard.set(model,forKey:"wo.model");UserDefaults.standard.set(force,forKey:"wo.force");UserDefaults.standard.set(deferVideoDownloads,forKey:"wo.defer.videos");UserDefaults.standard.set(analysisPrompt,forKey:"wo.analysis.prompt");UserDefaults.standard.set(bookmarkDomains,forKey:"wo.bookmark.domains");log("[程序] 配置已保存。")}
     func open(){saveConfig();browser.open(url);browserShown=true;log("[程序] 已打开验证浏览器，请完成验证。")}
     func openBookmarkVerification(){
         guard let job=bookmarkJobs.first(where:{$0.status == "pending"}) ?? bookmarkJobs.first else { log("[程序] 请先导入并匹配书签任务。"); return }
@@ -171,7 +173,9 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             models=list; if !list.contains(model){model=list[0]}; log("[程序] 已刷新模型列表，共 \(list.count) 个模型。")
         } catch { log("[程序] 刷新模型列表失败：\(error.localizedDescription)") }
     }
-    func getPlan(host:String,skeleton:String,guidance:String="",forceFresh:Bool=false) async throws->Plan {let k="wo.plan.\(host)";if !force,!forceFresh,guidance.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,let d=UserDefaults.standard.data(forKey:k),let cached=try?JSONDecoder().decode(CachedPlan.self,from:d),cached.version == 2 {log("[程序] 复用 \(host) 已保存的网页结构，不调用 AI。");return cached.plan};log("[AI] 正在识别标题与主体区域…");let requestGuidance=guidance.trimmingCharacters(in:.whitespacesAndNewlines);let prompt="分析网页结构，不要输出正文。返回 JSON：contentSelector（标题 CSS selector 不在此；只包住正文/图片/视频的最小 CSS selector）、titleSelector（标题 CSS selector）、excludes（需从主体内删除的 CSS selector 数组）。必须排除广告、推广按钮、菜单、分享控件、上一篇下一篇、标签、下载推广、相关推荐、评论、侧栏和页脚。不要用一个包含这些区域的大容器代替排除规则。\(!requestGuidance.isEmpty ? "用户的本次修正要求：\(requestGuidance)\n" : "")URL=\(url)\n结构：\(skeleton)";var r=URLRequest(url:URL(string:api.trimmingCharacters(in:CharacterSet(charactersIn:"/"))+"/chat/completions")!);r.httpMethod="POST";r.setValue("Bearer \(key)",forHTTPHeaderField:"Authorization");r.setValue("application/json",forHTTPHeaderField:"Content-Type");r.httpBody=try JSONSerialization.data(withJSONObject:["model":model,"temperature":0.1,"response_format":["type":"json_object"],"messages":[["role":"user","content":prompt]]]);let(d,_)=try await URLSession.shared.data(for:r);let o=try JSONSerialization.jsonObject(with:d)as![String:Any];let s=(((o["choices"]as?[[String:Any]])?.first?["message"]as?[String:Any])?["content"]as?String) ?? "{}";let p=try JSONDecoder().decode(Plan.self,from:Data(s.utf8));UserDefaults.standard.set(try JSONEncoder().encode(CachedPlan(version:2,plan:p)),forKey:k);return p}
+    func planSignature() -> String { SHA256.hash(data:Data(analysisPrompt.utf8)).map{String(format:"%02x",$0)}.joined() }
+    func clearCurrentPlanCache() { guard let host=URL(string:url)?.host?.lowercased() else { log("[程序] 请先填写有效网页地址。");return };UserDefaults.standard.removeObject(forKey:"wo.plan.\(host)");log("[程序] 已清空 \(host) 的网页结构缓存；下次保存将重新调用 AI 识别。") }
+    func getPlan(host:String,skeleton:String) async throws->Plan {let k="wo.plan.\(host)",signature=planSignature();if !force,let d=UserDefaults.standard.data(forKey:k),let cached=try?JSONDecoder().decode(CachedPlan.self,from:d),cached.version == 3,cached.promptSignature == signature {log("[程序] 复用 \(host) 已保存的网页结构，不调用 AI。");return cached.plan};log("[AI] 正在识别标题与主体区域…");let prompt="\(analysisPrompt.trimmingCharacters(in:.whitespacesAndNewlines))\nURL=\(url)\n结构：\(skeleton)";var r=URLRequest(url:URL(string:api.trimmingCharacters(in:CharacterSet(charactersIn:"/"))+"/chat/completions")!);r.httpMethod="POST";r.setValue("Bearer \(key)",forHTTPHeaderField:"Authorization");r.setValue("application/json",forHTTPHeaderField:"Content-Type");r.httpBody=try JSONSerialization.data(withJSONObject:["model":model,"temperature":0.1,"response_format":["type":"json_object"],"messages":[["role":"user","content":prompt]]]);let(d,_)=try await URLSession.shared.data(for:r);let o=try JSONSerialization.jsonObject(with:d)as![String:Any];let s=(((o["choices"]as?[[String:Any]])?.first?["message"]as?[String:Any])?["content"]as?String) ?? "{}";let p=try JSONDecoder().decode(Plan.self,from:Data(s.utf8));UserDefaults.standard.set(try JSONEncoder().encode(CachedPlan(version:3,plan:p,promptSignature:signature)),forKey:k);return p}
     func validImage(_ data: Data) -> Bool {
         let bytes=[UInt8](data.prefix(16))
         return bytes.starts(with:[0xFF,0xD8,0xFF]) || bytes.starts(with:[0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A]) || bytes.starts(with:[0x47,0x49,0x46,0x38]) || (bytes.count >= 12 && Array(bytes[0..<4]) == [0x52,0x49,0x46,0x46] && Array(bytes[8..<12]) == [0x57,0x45,0x42,0x50]) || (bytes.count >= 12 && String(bytes:bytes[4..<12],encoding:.ascii)?.contains("ftypavif") == true)
@@ -406,7 +410,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             }
         }
     }
-    func work(deferVideos: Bool=false,guidance:String="",forceFreshPlan:Bool=false) async -> SaveOutcome? {
+    func work(deferVideos: Bool=false) async -> SaveOutcome? {
         guard !url.isEmpty, !key.isEmpty else { log("[程序] 请填写网页地址和 API Key。"); return nil }
         guard !bookmarkStopRequested, !Task.isCancelled else { return nil }
         var stage="初始化"
@@ -415,7 +419,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             stage="等待正文图片渲染";try await browser.prepareRenderedImages()
             stage="生成网页结构骨架"
             let skeleton = try await browser.js("(()=>[...document.querySelectorAll('main,article,section,div')].slice(0,500).map(x=>'<'+x.tagName.toLowerCase()+' id=\"'+(x.id||'')+'\" class=\"'+(x.className||'')+'\">').join('\\n'))()") as? String ?? ""
-            let host = URL(string:url)?.host ?? "site"; stage="AI 主体结构识别";let p = try await getPlan(host:host, skeleton:skeleton,guidance:guidance,forceFresh:forceFreshPlan)
+            let host = URL(string:url)?.host ?? "site"; stage="AI 主体结构识别";let p = try await getPlan(host:host, skeleton:skeleton)
             let q = String(data:try JSONEncoder().encode(p.contentSelector),encoding:.utf8)!; let ex = String(data:try JSONEncoder().encode(p.excludes),encoding:.utf8)!; let ti = String(data:try JSONEncoder().encode(p.titleSelector ?? ""),encoding:.utf8)!
             stage="读取当前播放器资源";log("[程序] 正在从已验证浏览器读取视频播放资源…")
             let mediaJSON=String(data:try JSONEncoder().encode(try await browser.currentPageMediaURLs()),encoding:.utf8)!
@@ -519,28 +523,6 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         for item in items where ids.contains(item.id) { try?fm.removeItem(at:URL(fileURLWithPath:item.file).deletingLastPathComponent()) }
         items.removeAll{ids.contains($0.id)};persist();_ = cleanupOrphanedLibrary();log("[程序] 已删除 \(ids.count) 个已下载网页及对应资源。")
     }
-    func reparse(_ item: Item, guidance: String, onReplacement: @escaping (Item) -> Void = { _ in }) {
-        guard !downloading else { return }
-        Task {
-            bookmarkStopRequested=false;url=item.url;downloading=true;downloadStatus="正在按修改要求重新识别网页…"
-            defer { downloading=false;downloadStatus="" }
-            guard let outcome=await work(deferVideos:deferVideoDownloads,guidance:guidance,forceFreshPlan:true) else { return }
-            guard let replacement=items.firstIndex(where:{$0.id == outcome.itemID}) else { return }
-            items[replacement].groupID=item.groupID
-            let replacementItem=items[replacement]
-            if let previous=items.firstIndex(where:{$0.id == item.id}) { try?fm.removeItem(at:URL(fileURLWithPath:items[previous].file).deletingLastPathComponent());items.remove(at:previous) }
-            if let jobIndex=bookmarkJobs.firstIndex(where:{$0.itemID == item.id}) {
-                bookmarkJobs[jobIndex].itemID=outcome.itemID
-                bookmarkJobs[jobIndex].videoSources=outcome.videoSources
-                bookmarkJobs[jobIndex].downloadedVideoSources=[]
-            } else if deferVideoDownloads,!outcome.videoSources.isEmpty {
-                bookmarkJobs.append(BookmarkJob(id:UUID(),url:item.url,status:"done",videoSources:outcome.videoSources,downloadedVideoSources:[],itemID:outcome.itemID,groupID:item.groupID))
-            }
-            persist();persistBookmarkQueue();_ = cleanupOrphanedLibrary()
-            log("[程序] 已按修改要求重新识别并替换《\(item.title)》。")
-            onReplacement(replacementItem)
-        }
-    }
     func persist(){try?fm.createDirectory(at:root,withIntermediateDirectories:true);try?JSONEncoder().encode(items).write(to:root.appendingPathComponent("catalog.json"))}
 }
 struct Home:View{
@@ -561,6 +543,15 @@ struct WebSaveTab:View{
             TextField("网页地址",text:$s.url).textInputAutocapitalization(.never)
             Button("打开验证浏览器"){s.open()}
             Button("保存主体网页"){s.save()}.disabled(s.downloading || s.bookmarkRunning)
+        }
+        Section("当前网页的 AI 识别 Prompt") {
+            TextEditor(text:$s.analysisPrompt).frame(minHeight:180).textInputAutocapitalization(.never)
+            Text("保存网页时会把当前网页地址和实时读取到的网页结构追加到此 Prompt 后提交给 AI。修改 Prompt 会自动使旧结构缓存失效。").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("恢复默认 Prompt") { s.analysisPrompt=defaultAnalysisPrompt }
+                Spacer()
+                Button("清空当前网页结构缓存") { s.clearCurrentPlanCache() }
+            }
         }
         if s.downloading || !s.downloadStatus.isEmpty{Section("下载进度"){HStack{if s.downloading{ProgressView()};Text(s.downloadStatus).font(.subheadline)}}}
         Section("日志"){ForEach(s.logs.indices,id:\.self){Text(s.logs[$0]).font(.caption).textSelection(.enabled)}}
@@ -676,28 +667,8 @@ struct WebSheet: View {
     }
 }
 struct OfflinePreview: View {
-    @EnvironmentObject var s: Store
-    @State private var activeItem: Item
-    @State private var showingGuidance=false
-    @State private var guidance=""
-    init(item: Item) { _activeItem=State(initialValue:item) }
-    var body: some View {
-        LocalWebView(file: URL(fileURLWithPath: activeItem.file),title:activeItem.title).id(activeItem.id)
-            .navigationTitle(activeItem.title).navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItemGroup(placement:.topBarTrailing) {
-                    Button { showingGuidance=true } label: { Image(systemName:"square.and.pencil") }.accessibilityLabel("修改要求")
-                    Button { s.reparse(activeItem,guidance:guidance) { activeItem=$0 } } label: { Image(systemName:"paperplane.fill") }.accessibilityLabel("提交给大模型重新识别").disabled(s.downloading)
-                }
-            }
-            .sheet(isPresented:$showingGuidance) {
-                NavigationStack { VStack(alignment:.leading,spacing:14) {
-                    Text("说明需要保留、删除或修正的内容。提交后将强制调用大模型重新识别当前网页的主体。 ").font(.subheadline).foregroundStyle(.secondary)
-                    TextEditor(text:$guidance).overlay(RoundedRectangle(cornerRadius:8).stroke(.secondary.opacity(0.35))).frame(minHeight:180)
-                    Spacer()
-                }.padding().navigationTitle("修改要求").toolbar { ToolbarItem(placement:.confirmationAction) { Button("完成") { showingGuidance=false } } } }
-            }
-    }
+    let item: Item
+    var body: some View { LocalWebView(file: URL(fileURLWithPath: item.file),title:item.title).navigationTitle(item.title).navigationBarTitleDisplayMode(.inline) }
 }
 struct LocalWebView: UIViewRepresentable {
     let file: URL
