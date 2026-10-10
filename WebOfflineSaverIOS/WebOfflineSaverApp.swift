@@ -499,20 +499,23 @@ struct LocalWebView: UIViewRepresentable {
     let file: URL
     let title: String
     func makeCoordinator() -> Coordinator { Coordinator(owner:self) }
-    func makeUIView(context: Context) -> WKWebView { let view=WKWebView();view.navigationDelegate=context.coordinator;view.uiDelegate=context.coordinator;view.loadFileURL(file, allowingReadAccessTo:file.deletingLastPathComponent().deletingLastPathComponent());return view }
+    func makeUIView(context: Context) -> WKWebView { let configuration=WKWebViewConfiguration();configuration.userContentController.add(context.coordinator,name:"offlineImage");let view=WKWebView(frame:.zero,configuration:configuration);view.navigationDelegate=context.coordinator;view.uiDelegate=context.coordinator;view.loadFileURL(file, allowingReadAccessTo:file.deletingLastPathComponent().deletingLastPathComponent());return view }
     func updateUIView(_ view: WKWebView, context: Context) {}
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         let owner: LocalWebView
         init(owner: LocalWebView) { self.owner=owner }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard let encoded=try?JSONEncoder().encode(owner.title),let literal=String(data:encoded,encoding:.utf8) else{return}
-            webView.evaluateJavaScript("(()=>{if(document.getElementById('offline-page-title'))return;const title=document.createElement('h1');title.id='offline-page-title';title.textContent=\(literal);title.style.cssText='font-size:1.45em;line-height:1.35;margin:0 0 1em';document.body.prepend(title)})()")
+            webView.evaluateJavaScript("(()=>{if(!document.getElementById('offline-page-title')){const title=document.createElement('h1');title.id='offline-page-title';title.textContent=\(literal);title.style.cssText='font-size:1.45em;line-height:1.35;margin:0 0 1em';document.body.prepend(title)}document.querySelectorAll('img').forEach(image=>{image.oncontextmenu=event=>{event.preventDefault();window.webkit.messageHandlers.offlineImage.postMessage(image.currentSrc||image.src);return false}})})()")
         }
-        func webView(_ webView: WKWebView, contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo, completionHandler: @escaping (UIContextMenuConfiguration?) -> Void) {
-            guard let imageURL=elementInfo.imageURL else { completionHandler(nil); return }
-            let export=UIAction(title:"导出图片",image:UIImage(systemName:"square.and.arrow.up")){[weak webView] _ in self.export(imageURL,from:webView) }
-            let rerender=UIAction(title:"重新渲染保存",image:UIImage(systemName:"arrow.clockwise")){[weak webView] _ in if let webView{self.rerender(imageURL,in:webView)} }
-            completionHandler(UIContextMenuConfiguration(identifier:nil,previewProvider:nil){_ in UIMenu(title:"图片",children:[export,rerender])})
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "offlineImage",let raw=message.body as? String,let imageURL=URL(string:raw),let webView=message.webView,let controller=topController(from:webView.window?.rootViewController) else{return}
+            let sheet=UIAlertController(title:"图片",message:nil,preferredStyle:.actionSheet)
+            sheet.addAction(UIAlertAction(title:"导出图片",style:.default){_ in self.export(imageURL,from:webView)})
+            sheet.addAction(UIAlertAction(title:"重新渲染保存",style:.default){_ in self.rerender(imageURL,in:webView)})
+            sheet.addAction(UIAlertAction(title:"取消",style:.cancel))
+            sheet.popoverPresentationController?.sourceView=webView
+            controller.present(sheet,animated:true)
         }
         func export(_ imageURL: URL, from webView: WKWebView?) {
             guard let controller=topController(from:webView?.window?.rootViewController) else{return}
