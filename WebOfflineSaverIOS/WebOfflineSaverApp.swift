@@ -9,7 +9,7 @@ struct Plan: Codable { let contentSelector: String; let titleSelector: String?; 
 struct CachedPlan: Codable { let version: Int; let plan: Plan }
 struct Item: Codable, Identifiable, Hashable { let id: UUID; let title, url, file: String; var groupID: UUID? }
 struct AssetRef: Codable { let url: String; let kind: String }
-struct CapturedPage: Decodable { let title: String; let html: String; let resources: [AssetRef]; let selectedVideo: String?; let missingVideo: Bool? }
+struct CapturedPage: Decodable { let title: String; let html: String; let resources: [AssetRef]; let selectedVideo: String?; let missingVideo: Bool?; let manualRemoved: Int? }
 struct BookmarkJob: Codable, Identifiable {
     let id: UUID
     let url: String
@@ -191,6 +191,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         log("[程序] 已记住该网页的图片需要从已渲染页面保存。")
     }
     func htmlEscaped(_ value: String) -> String { value.replacingOccurrences(of:"&",with:"&amp;").replacingOccurrences(of:"<",with:"&lt;").replacingOccurrences(of:">",with:"&gt;").replacingOccurrences(of:"\"",with:"&quot;") }
+    func replaceResourceReference(_ html: String, source: String, local: String) -> String { let replaced=html.replacingOccurrences(of:source,with:local);let escaped=source.replacingOccurrences(of:"&",with:"&amp;");return escaped == source ? replaced : replaced.replacingOccurrences(of:escaped,with:local) }
     func renderedImage(_ source:String, assets:URL, number:Int) async -> String? {
         guard let encoded=try?JSONEncoder().encode(source),let literal=String(data:encoded,encoding:.utf8) else{return nil}
         // Return one rendered image at a time.  Returning every canvas together
@@ -385,7 +386,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             var local:String?
             if fm.fileExists(atPath:cache.path) { local="../MediaCache/\(cache.lastPathComponent)" }
             else { let raw=source.lowercased().contains(".m3u8") ? await localHLS(source,assets:assets,number:1000 + ordinal) : await localAsset(source,assets:assets,number:1000 + ordinal);if let raw { local=cacheVideo(local:raw,folder:folder,pageURL:job.url,ordinal:ordinal) } }
-            if let local { html=html.replacingOccurrences(of:source,with:local);bookmarkJobs[index].downloadedVideoSources=(bookmarkJobs[index].downloadedVideoSources ?? []) + [source] }
+            if let local { html=replaceResourceReference(html,source:source,local:local);bookmarkJobs[index].downloadedVideoSources=(bookmarkJobs[index].downloadedVideoSources ?? []) + [source] }
             else { failed=true }
         }
         try?html.write(toFile:item.file,atomically:true,encoding:.utf8)
@@ -415,7 +416,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             stage="生成网页结构骨架"
             let skeleton = try await browser.js("(()=>[...document.querySelectorAll('main,article,section,div')].slice(0,500).map(x=>'<'+x.tagName.toLowerCase()+' id=\"'+(x.id||'')+'\" class=\"'+(x.className||'')+'\">').join('\\n'))()") as? String ?? ""
             let host = URL(string:url)?.host ?? "site"; stage="AI 主体结构识别";let p = try await getPlan(host:host, skeleton:skeleton,exclusionHints:exclusionHints,forceFresh:forceFreshPlan)
-            let q = String(data:try JSONEncoder().encode(p.contentSelector),encoding:.utf8)!; let ex = String(data:try JSONEncoder().encode(p.excludes),encoding:.utf8)!; let ti = String(data:try JSONEncoder().encode(p.titleSelector ?? ""),encoding:.utf8)!
+            let q = String(data:try JSONEncoder().encode(p.contentSelector),encoding:.utf8)!; let ex = String(data:try JSONEncoder().encode(p.excludes),encoding:.utf8)!; let ti = String(data:try JSONEncoder().encode(p.titleSelector ?? ""),encoding:.utf8)!; let manualExclusions = exclusionHints.isEmpty ? "[]" : exclusionHints
             stage="读取当前播放器资源";log("[程序] 正在从已验证浏览器读取视频播放资源…")
             let mediaJSON=String(data:try JSONEncoder().encode(try await browser.currentPageMediaURLs()),encoding:.utf8)!
             let baseline=mediaJSON
@@ -433,6 +434,19 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
               root.querySelectorAll('script,style,iframe,form,noscript,svg').forEach(el=>el.remove());
               excludes.forEach(remove);
               ['nav','[role="navigation"]','.article-ads-btn','.a2a_kit','.post-near','.tags','.article-download','.content-tabs','[class*="advert"]','[class*="ads-"]','[id*="advert"]','[id*="ads-"]'].forEach(remove);
+              // A user-selected exclusion must be honored even when the AI cannot
+              // reconstruct a sufficiently specific CSS selector from the hint.
+              // Match the saved DOM by stable ID first, then tag/classes, then text.
+              const manualExclusions=\(manualExclusions), normal=value=>(value||'').replace(/\\s+/g,' ').trim(); let manualRemoved=0;
+              manualExclusions.forEach(mark=>{
+                let candidates=[];
+                const tag=(mark.tag||'*').toLowerCase();
+                if(mark.id){try{candidates=[...root.querySelectorAll('[id="'+CSS.escape(mark.id)+'"]')]}catch(_){}}
+                if(!candidates.length&&mark.classes){const classes=String(mark.classes).split(/\\s+/).filter(value=>value&&value!=='wos-exclude-selected');if(classes.length){try{candidates=[...root.querySelectorAll(tag+classes.map(value=>'.'+CSS.escape(value)).join(''))]}catch(_){}}}
+                const text=normal(mark.text).slice(0,140);
+                if(!candidates.length&&text){try{candidates=[...root.querySelectorAll(tag)].filter(element=>normal(element.innerText).includes(text))}catch(_){}}
+                candidates.filter(element=>element!==root).forEach(element=>{element.remove();manualRemoved++});
+              });
               [...root.querySelectorAll('blockquote,p,strong')].forEach(el=>{if((el.innerText||'').includes('每日大赛最新地址'))(el.closest('blockquote')||el).remove()});
               const keyword=[...root.querySelectorAll('p,div,strong')].find(el=>(el.innerText||'').trim().startsWith('关键词：'));
               if(keyword){const parent=keyword.parentElement;let found=false;[...parent.children].forEach(el=>{if(found)el.remove();if(el===keyword)found=true});keyword.remove()}
@@ -448,11 +462,11 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
               root.querySelectorAll('a[href]').forEach(a=>{a.href=absolute(a.getAttribute('href'));a.target='_blank';a.rel='noopener'});
               const resources=[...new Map([...root.querySelectorAll('img')].map(el=>[el.getAttribute('src'),{url:el.getAttribute('src'),kind:'image'}]).concat([...root.querySelectorAll('video,source')].map(el=>[el.getAttribute('src'),{url:el.getAttribute('src'),kind:'video'}])).filter(([url])=>Boolean(url))).values()];
               const titleSelector=\(ti), title=(titleSelector&&document.querySelector(titleSelector)?.innerText||root.querySelector('h1')?.innerText||document.querySelector('h1.entry-title,h1.post-title,.entry-title,.post-title')?.innerText||document.querySelector('meta[property="og:title"],meta[name="twitter:title"]')?.getAttribute('content')||document.title).trim();
-              return JSON.stringify({title,html:root.outerHTML,resources,selectedVideo,missingVideo});
+              return JSON.stringify({title,html:root.outerHTML,resources,selectedVideo,missingVideo,manualRemoved});
             })()
             """
             stage="提取正文和已渲染图片";guard let raw=try await browser.js(script) as? String else { throw URLError(.cannotParseResponse) }
-            let page = try JSONDecoder().decode(CapturedPage.self, from: Data(raw.utf8)); if page.missingVideo == true { throw NSError(domain:"WebOfflineSaver",code:2,userInfo:[NSLocalizedDescriptionKey:"未能从已验证页面取得实际视频资源；已取消保存，避免生成伪离线网页。"])}; if let selected=page.selectedVideo,!selected.isEmpty{log("[程序] 已锁定当前播放器视频地址：\(selected)")}; let id=UUID(), dir=root.appendingPathComponent(id.uuidString), assets=dir.appendingPathComponent("assets",isDirectory:true)
+            let page = try JSONDecoder().decode(CapturedPage.self, from: Data(raw.utf8)); if page.missingVideo == true { throw NSError(domain:"WebOfflineSaver",code:2,userInfo:[NSLocalizedDescriptionKey:"未能从已验证页面取得实际视频资源；已取消保存，避免生成伪离线网页。"])}; if !exclusionHints.isEmpty,(page.manualRemoved ?? 0) == 0{log("[程序] 手动标记未在当前正文根节点中匹配到内容，已继续由 AI 排除规则处理。")}; if let removed=page.manualRemoved,removed>0{log("[程序] 已按手动标记剔除 \(removed) 个非主体节点。")}; if let selected=page.selectedVideo,!selected.isEmpty{log("[程序] 已锁定当前播放器视频地址：\(selected)")}; let id=UUID(), dir=root.appendingPathComponent(id.uuidString), assets=dir.appendingPathComponent("assets",isDirectory:true)
             try fm.createDirectory(at: assets, withIntermediateDirectories:true)
             var fragment = page.html; var saved=0; var videoOrdinal=0; var deferredVideos:[String]=[]
             for (index, asset) in page.resources.enumerated() {
@@ -460,11 +474,11 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
                 let source=asset.url; let isHLS=source.lowercased().contains(".m3u8")
                 let isVideo=asset.kind == "video"
                 if isVideo && deferVideos { deferredVideos.append(source); continue }
-                if isVideo { videoOrdinal += 1; if let cache=cachedVideo(pageURL:url,ordinal:videoOrdinal){fragment=fragment.replacingOccurrences(of:source,with:"../MediaCache/\(cache.lastPathComponent)");saved += 1;continue};log("[程序] 视频资源地址：\(source)") }
+                if isVideo { videoOrdinal += 1; if let cache=cachedVideo(pageURL:url,ordinal:videoOrdinal){fragment=replaceResourceReference(fragment,source:source,local:"../MediaCache/\(cache.lastPathComponent)");saved += 1;continue};log("[程序] 视频资源地址：\(source)") }
                 if isVideo && !isHLS { downloadStatus="正在下载 MP4 视频…" }
                 let downloaded=isHLS ? await localHLS(source,assets:assets,number:index + 1) : await localAsset(source, assets:assets, number:index + 1, imageOnly:asset.kind == "image")
                 let local=isVideo ? downloaded.flatMap{cacheVideo(local:$0,folder:dir,pageURL:url,ordinal:videoOrdinal)} : downloaded
-                if let local { fragment = fragment.replacingOccurrences(of: source, with: local); saved += 1 }
+                if let local { fragment = replaceResourceReference(fragment,source:source,local:local); saved += 1 }
                 else if isVideo { throw NSError(domain:"WebOfflineSaver",code:1,userInfo:[NSLocalizedDescriptionKey:"视频资源未能下载，已取消保存以避免生成伪离线网页。"]) }
             }
             let file=dir.appendingPathComponent("index.html"),item=Item(id:id,title:page.title.isEmpty ? host : page.title,url:url,file:file.path,groupID:nil)
