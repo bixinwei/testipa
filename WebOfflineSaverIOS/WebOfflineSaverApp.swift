@@ -237,13 +237,13 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         if !fm.fileExists(atPath:file.path) {
             let renderer=UIGraphicsImageRenderer(size:CGSize(width:200,height:200))
             let image=renderer.image { context in
-                UIColor(white:0.72,alpha:1).setFill()
-                context.fill(CGRect(x:0,y:0,width:200,height:200))
-                UIColor(white:0.58,alpha:1).setStroke()
+                context.cgContext.setFillColor(UIColor(white:0.72,alpha:1).cgColor)
+                context.cgContext.fill(CGRect(x:0,y:0,width:200,height:200))
+                context.cgContext.setStrokeColor(UIColor(white:0.58,alpha:1).cgColor)
                 context.cgContext.setLineWidth(3)
                 context.cgContext.stroke(CGRect(x:24,y:24,width:152,height:152))
             }
-            try?image.pngData()?.write(to:file,options:.atomic)
+            if let data=image.pngData() { try?data.write(to:file,options:.atomic) }
         }
         return "assets/placeholder.png"
     }
