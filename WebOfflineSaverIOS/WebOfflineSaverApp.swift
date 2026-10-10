@@ -90,6 +90,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
     @Published var videoDownloadingJobs=Set<UUID>()
     @Published var archiveGroups:[ArchiveGroup]=[]
     private var bookmarkStopRequested=false
+    private var activeBookmarkFilter="all"
     let browser=Browser(); let fm=FileManager.default
     var root:URL{fm.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("OfflineLibrary",isDirectory:true)}
     var mediaCache:URL{root.appendingPathComponent("MediaCache",isDirectory:true)}
@@ -102,7 +103,8 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         url=job.url; open()
     }
     func save(){Task{if !bookmarkRunning{bookmarkStopRequested=false};downloading=true;downloadStatus="正在准备保存网页…";defer{downloading=false;downloadStatus=""};_ = await work()}}
-    var bookmarkCompleted: Int { bookmarkJobs.filter{$0.status == "done" || $0.status == "failed"}.count }
+    func bookmarkJobs(matching filter: String) -> [BookmarkJob] { filter == "all" ? bookmarkJobs : filter == "none" ? bookmarkJobs.filter{$0.groupID == nil} : bookmarkJobs.filter{$0.groupID?.uuidString == filter} }
+    func bookmarkCompleted(matching filter: String) -> Int { bookmarkJobs(matching:filter).filter{$0.status == "done" || $0.status == "failed"}.count }
     func persistBookmarkQueue(){UserDefaults.standard.set(try?JSONEncoder().encode(bookmarkJobs),forKey:"wo.bookmark.queue")}
     func persistArchiveGroups(){UserDefaults.standard.set(try?JSONEncoder().encode(archiveGroups),forKey:"wo.archive.groups")}
     func createArchiveGroup(_ name: String) { let trimmed=name.trimmingCharacters(in:.whitespacesAndNewlines);guard !trimmed.isEmpty,!archiveGroups.contains(where:{$0.name == trimmed}) else{return};archiveGroups.append(ArchiveGroup(id:UUID(),name:trimmed));persistArchiveGroups();log("[程序] 已创建归档分组《\(trimmed)》。") }
@@ -132,17 +134,19 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         let known=Set(bookmarkJobs.map{$0.url}).union(Set(items.map{$0.url})); let unique=Array(Set(links)).filter{!known.contains($0)}.sorted()
         bookmarkJobs += unique.map{BookmarkJob(id:UUID(),url:$0,status:"pending",videoSources:[],downloadedVideoSources:[],itemID:nil,groupID:nil)}; persistBookmarkQueue(); log("[程序] 书签共匹配到 \(links.count) 个网页，已加入 \(unique.count) 个未重复任务。")
     }
-    func startBookmarkQueue() {
-        guard !bookmarkRunning else{return}; guard !bookmarkJobs.isEmpty else{log("[程序] 暂无书签任务。");return}
-        bookmarkJobs=bookmarkJobs.map{var job=$0;if job.status == "failed"{job.status="pending"};return job};persistBookmarkQueue();bookmarkStopRequested=false;bookmarkRunning=true
+    func startBookmarkQueue(filter: String="all") {
+        guard !bookmarkRunning else{return}; guard !bookmarkJobs(matching:filter).isEmpty else{log("[程序] 当前分组暂无任务。");return}
+        activeBookmarkFilter=filter
+        for index in bookmarkJobs.indices where bookmarkJobs(matching:filter).contains(where:{$0.id == bookmarkJobs[index].id}) && bookmarkJobs[index].status == "failed" { bookmarkJobs[index].status="pending" }
+        persistBookmarkQueue();bookmarkStopRequested=false;bookmarkRunning=true
         Task { await runBookmarkQueue() }
     }
     func stopBookmarkQueue(){bookmarkStopRequested=true;log("[程序] 已请求暂停；为保护当前网页，正在完成或安全中止当前任务。")}
     func runBookmarkQueue() async {
         defer { bookmarkRunning=false;persistBookmarkQueue() }
-        while let index=bookmarkJobs.indices.first(where:{bookmarkJobs[$0].status == "pending"}) {
+        while let index=bookmarkJobs.indices.first(where:{bookmarkJobs[$0].status == "pending" && bookmarkJobs(matching:activeBookmarkFilter).contains(where:{$0.id == bookmarkJobs[$0].id})}) {
             if bookmarkStopRequested || Task.isCancelled { break }
-            bookmarkCurrent=bookmarkCompleted + 1; url=bookmarkJobs[index].url; downloadStatus="正在准备保存网页…"; saveConfig();log("[程序] 正在处理书签任务 \(bookmarkCurrent)/\(bookmarkJobs.count)：\(url)")
+            bookmarkCurrent=bookmarkCompleted(matching:activeBookmarkFilter) + 1; url=bookmarkJobs[index].url; downloadStatus="正在准备保存网页…"; saveConfig();log("[程序] 正在处理书签任务 \(bookmarkCurrent)/\(bookmarkJobs(matching:activeBookmarkFilter).count)：\(url)")
             let outcome=await work(deferVideos:true)
             downloadStatus=""
             if bookmarkStopRequested || Task.isCancelled { break }
@@ -151,7 +155,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             persistBookmarkQueue()
         }
         if bookmarkStopRequested { log("[程序] 书签任务已暂停，可随时继续。") }
-        else { log("[程序] 书签队列已处理完成：\(bookmarkCompleted)/\(bookmarkJobs.count)。") }
+        else { log("[程序] 书签队列已处理完成：\(bookmarkCompleted(matching:activeBookmarkFilter))/\(bookmarkJobs(matching:activeBookmarkFilter).count)。") }
     }
     func refreshModels(){Task{await loadModels()}}
     func loadModels() async {
@@ -444,11 +448,16 @@ struct BookmarkBatchTab:View{
             Text("填写允许的域名；可用换行、逗号或分号分隔。导入 HTML 书签后，仅保存这些域名及其子域名的超链接。").font(.caption).foregroundStyle(.secondary)
             Button("导入 HTML 书签"){importingBookmarks=true}.disabled(s.bookmarkRunning)
             Button("打开验证浏览器"){s.openBookmarkVerification()}.disabled(s.bookmarkRunning || s.bookmarkJobs.isEmpty)
-            if !s.bookmarkJobs.isEmpty {
-                ProgressView(value:Double(s.bookmarkCompleted),total:Double(s.bookmarkJobs.count))
-                Text("任务总数：\(s.bookmarkJobs.count)　已处理：\(s.bookmarkCompleted)　当前：\(s.bookmarkRunning ? s.bookmarkCurrent : 0)").font(.subheadline)
+            if groupFilter != "all" && groupFilter != "none" {
+                ProgressView(value:Double(s.bookmarkCompleted(matching:groupFilter)),total:Double(visibleJobs.count))
+                Text("任务总数：\(visibleJobs.count)　已处理：\(s.bookmarkCompleted(matching:groupFilter))　当前：\(s.bookmarkRunning ? s.bookmarkCurrent : 0)").font(.subheadline)
                 HStack {
-                    Button(s.bookmarkRunning ? "正在处理" : "开始／继续"){s.startBookmarkQueue()}.disabled(s.bookmarkRunning)
+                    Button(s.bookmarkRunning ? "正在处理" : "开始／继续"){s.startBookmarkQueue(filter:groupFilter)}.disabled(s.bookmarkRunning)
+                    Button("暂停"){s.stopBookmarkQueue()}.disabled(!s.bookmarkRunning)
+                }
+            } else if !visibleJobs.isEmpty {
+                HStack {
+                    Button(s.bookmarkRunning ? "正在处理" : "开始／继续"){s.startBookmarkQueue(filter:groupFilter)}.disabled(s.bookmarkRunning)
                     Button("暂停"){s.stopBookmarkQueue()}.disabled(!s.bookmarkRunning)
                 }
             }
