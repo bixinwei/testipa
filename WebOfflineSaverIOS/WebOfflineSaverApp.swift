@@ -171,6 +171,33 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             models=list; if !list.contains(model){model=list[0]}; log("[程序] 已刷新模型列表，共 \(list.count) 个模型。")
         } catch { log("[程序] 刷新模型列表失败：\(error.localizedDescription)") }
     }
+    func manualExclusionKey(_ host: String) -> String { "wo.manual.exclusions.\(host.lowercased())" }
+    func exclusionMarks(_ raw: String) -> [[String:String]] {
+        guard let data=raw.data(using:.utf8) else{return []}
+        return (try?JSONDecoder().decode([[String:String]].self,from:data)) ?? []
+    }
+    func manualExclusionHints(for host: String) -> String {
+        guard let data=UserDefaults.standard.data(forKey:manualExclusionKey(host)),
+              let marks=try?JSONDecoder().decode([[String:String]].self,from:data),
+              !marks.isEmpty,
+              let encoded=try?JSONEncoder().encode(marks),
+              let text=String(data:encoded,encoding:.utf8) else{return "[]"}
+        return text
+    }
+    func rememberManualExclusions(host: String, hints: String) {
+        let incoming=exclusionMarks(hints)
+        guard !incoming.isEmpty else{return}
+        var combined=exclusionMarks(manualExclusionHints(for:host))
+        var fingerprints=Set(combined.map { "\($0["id"] ?? "")|\($0["tag"] ?? "")|\($0["classes"] ?? "")|\($0["text"] ?? "")" })
+        for mark in incoming {
+            let fingerprint="\((mark["id"] ?? ""))|\((mark["tag"] ?? ""))|\((mark["classes"] ?? ""))|\((mark["text"] ?? ""))"
+            if fingerprints.insert(fingerprint).inserted { combined.append(mark) }
+        }
+        if let data=try?JSONEncoder().encode(combined) {
+            UserDefaults.standard.set(data,forKey:manualExclusionKey(host))
+            log("[程序] 已保存 \(host) 的 \(combined.count) 条非主体规则，后续同站网页会自动应用。")
+        }
+    }
     func getPlan(host:String,skeleton:String,exclusionHints:String="",forceFresh:Bool=false) async throws->Plan {let k="wo.plan.\(host)";if !force,!forceFresh,let d=UserDefaults.standard.data(forKey:k),let cached=try?JSONDecoder().decode(CachedPlan.self,from:d),cached.version == 3 {log("[程序] 复用 \(host) 已保存的网页结构，不调用 AI。");return cached.plan};log(exclusionHints.isEmpty ? "[AI] 正在识别标题与主体区域…" : "[AI] 正在根据非主体标记修正网页结构…");let hint=exclusionHints.isEmpty ? "" : "\n用户在已下载预览中标记了以下非主体 DOM 片段。必须在新的 excludes 中排除与这些片段对应的区域：\n\(exclusionHints)\n";let prompt="分析网页结构，不要输出正文。返回 JSON：contentSelector（标题 CSS selector 不在此；只包住正文/图片/视频的最小 CSS selector）、titleSelector（标题 CSS selector）、excludes（需从主体内删除的 CSS selector 数组）。必须排除广告、推广按钮、菜单、分享控件、上一篇下一篇、标签、下载推广、相关推荐、评论、侧栏和页脚。不要用一个包含这些区域的大容器代替排除规则。\(hint)URL=\(url)\n完整网页结构：\(skeleton)";var r=URLRequest(url:URL(string:api.trimmingCharacters(in:CharacterSet(charactersIn:"/"))+"/chat/completions")!);r.httpMethod="POST";r.setValue("Bearer \(key)",forHTTPHeaderField:"Authorization");r.setValue("application/json",forHTTPHeaderField:"Content-Type");r.httpBody=try JSONSerialization.data(withJSONObject:["model":model,"temperature":0.1,"response_format":["type":"json_object"],"messages":[["role":"user","content":prompt]]]);let(d,_)=try await URLSession.shared.data(for:r);let o=try JSONSerialization.jsonObject(with:d)as![String:Any];let s=(((o["choices"]as?[[String:Any]])?.first?["message"]as?[String:Any])?["content"]as?String) ?? "{}";let p=try JSONDecoder().decode(Plan.self,from:Data(s.utf8));UserDefaults.standard.set(try JSONEncoder().encode(CachedPlan(version:3,plan:p)),forKey:k);return p}
     func validImage(_ data: Data) -> Bool {
         let bytes=[UInt8](data.prefix(16))
@@ -415,8 +442,8 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             stage="等待正文图片渲染";try await browser.prepareRenderedImages()
             stage="生成网页结构骨架"
             let skeleton = try await browser.js("(()=>[...document.querySelectorAll('main,article,section,div')].slice(0,500).map(x=>'<'+x.tagName.toLowerCase()+' id=\"'+(x.id||'')+'\" class=\"'+(x.className||'')+'\">').join('\\n'))()") as? String ?? ""
-            let host = URL(string:url)?.host ?? "site"; stage="AI 主体结构识别";let p = try await getPlan(host:host, skeleton:skeleton,exclusionHints:exclusionHints,forceFresh:forceFreshPlan)
-            let q = String(data:try JSONEncoder().encode(p.contentSelector),encoding:.utf8)!; let ex = String(data:try JSONEncoder().encode(p.excludes),encoding:.utf8)!; let ti = String(data:try JSONEncoder().encode(p.titleSelector ?? ""),encoding:.utf8)!; let manualExclusions = exclusionHints.isEmpty ? "[]" : exclusionHints
+            let host = URL(string:url)?.host ?? "site"; let storedExclusions=manualExclusionHints(for:host); let effectiveExclusions=storedExclusions; stage="AI 主体结构识别";let p = try await getPlan(host:host, skeleton:skeleton,exclusionHints:effectiveExclusions,forceFresh:forceFreshPlan)
+            let q = String(data:try JSONEncoder().encode(p.contentSelector),encoding:.utf8)!; let ex = String(data:try JSONEncoder().encode(p.excludes),encoding:.utf8)!; let ti = String(data:try JSONEncoder().encode(p.titleSelector ?? ""),encoding:.utf8)!; let manualExclusions = effectiveExclusions
             stage="读取当前播放器资源";log("[程序] 正在从已验证浏览器读取视频播放资源…")
             let mediaJSON=String(data:try JSONEncoder().encode(try await browser.currentPageMediaURLs()),encoding:.utf8)!
             let baseline=mediaJSON
@@ -466,7 +493,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             })()
             """
             stage="提取正文和已渲染图片";guard let raw=try await browser.js(script) as? String else { throw URLError(.cannotParseResponse) }
-            let page = try JSONDecoder().decode(CapturedPage.self, from: Data(raw.utf8)); if page.missingVideo == true { throw NSError(domain:"WebOfflineSaver",code:2,userInfo:[NSLocalizedDescriptionKey:"未能从已验证页面取得实际视频资源；已取消保存，避免生成伪离线网页。"])}; if !exclusionHints.isEmpty,(page.manualRemoved ?? 0) == 0{log("[程序] 手动标记未在当前正文根节点中匹配到内容，已继续由 AI 排除规则处理。")}; if let removed=page.manualRemoved,removed>0{log("[程序] 已按手动标记剔除 \(removed) 个非主体节点。")}; if let selected=page.selectedVideo,!selected.isEmpty{log("[程序] 已锁定当前播放器视频地址：\(selected)")}; let id=UUID(), dir=root.appendingPathComponent(id.uuidString), assets=dir.appendingPathComponent("assets",isDirectory:true)
+            let page = try JSONDecoder().decode(CapturedPage.self, from: Data(raw.utf8)); if page.missingVideo == true { throw NSError(domain:"WebOfflineSaver",code:2,userInfo:[NSLocalizedDescriptionKey:"未能从已验证页面取得实际视频资源；已取消保存，避免生成伪离线网页。"])}; if effectiveExclusions != "[]",(page.manualRemoved ?? 0) == 0{log("[程序] 手动标记未在当前正文根节点中匹配到内容，已继续由 AI 排除规则处理。")}; if let removed=page.manualRemoved,removed>0{log("[程序] 已按手动标记剔除 \(removed) 个非主体节点。")}; if let selected=page.selectedVideo,!selected.isEmpty{log("[程序] 已锁定当前播放器视频地址：\(selected)")}; let id=UUID(), dir=root.appendingPathComponent(id.uuidString), assets=dir.appendingPathComponent("assets",isDirectory:true)
             try fm.createDirectory(at: assets, withIntermediateDirectories:true)
             var fragment = page.html; var saved=0; var videoOrdinal=0; var deferredVideos:[String]=[]
             for (index, asset) in page.resources.enumerated() {
@@ -536,7 +563,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         guard !downloading else { return }
         guard !hints.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,hints != "[]" else { log("[程序] 请先标记需要剔除的非主体内容。");return }
         Task {
-            bookmarkStopRequested=false;url=item.url;downloading=true;downloadStatus="正在按非主体标记重新识别网页…"
+            bookmarkStopRequested=false;url=item.url;let host=URL(string:item.url)?.host ?? "site";rememberManualExclusions(host:host,hints:hints);downloading=true;downloadStatus="正在按非主体标记重新识别网页…"
             defer { downloading=false;downloadStatus="" }
             guard let outcome=await work(deferVideos:deferVideoDownloads,exclusionHints:hints,forceFreshPlan:true) else { return }
             guard let replacement=items.firstIndex(where:{$0.id == outcome.itemID}) else { return }
