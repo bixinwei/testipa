@@ -506,10 +506,14 @@ struct LocalWebView: UIViewRepresentable {
         init(owner: LocalWebView) { self.owner=owner }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard let encoded=try?JSONEncoder().encode(owner.title),let literal=String(data:encoded,encoding:.utf8) else{return}
-            webView.evaluateJavaScript("(()=>{if(!document.getElementById('offline-page-title')){const title=document.createElement('h1');title.id='offline-page-title';title.textContent=\(literal);title.style.cssText='font-size:1.45em;line-height:1.35;margin:0 0 1em';document.body.prepend(title)}document.querySelectorAll('img').forEach(image=>{image.oncontextmenu=event=>{event.preventDefault();window.webkit.messageHandlers.offlineImage.postMessage(image.currentSrc||image.src);return false}})})()")
+            let script="""
+            (()=>{if(!document.getElementById('offline-page-title')){const title=document.createElement('h1');title.id='offline-page-title';title.textContent=\(literal);title.style.cssText='font-size:1.45em;line-height:1.35;margin:0 0 1em';document.body.prepend(title)}if(!document.getElementById('offline-image-style')){const style=document.createElement('style');style.id='offline-image-style';style.textContent='img{-webkit-touch-callout:none!important;-webkit-user-select:none!important;user-select:none!important}';document.head.append(style)}const send=(action,image)=>window.webkit.messageHandlers.offlineImage.postMessage({action:action,src:image.currentSrc||image.src});document.querySelectorAll('img').forEach(image=>{if(image.dataset.offlineGesture)return;image.dataset.offlineGesture='1';let hold=null,lastTap=0;image.addEventListener('contextmenu',event=>event.preventDefault());image.addEventListener('touchstart',()=>{hold=setTimeout(()=>send('menu',image),550)},{passive:true});image.addEventListener('touchmove',()=>{clearTimeout(hold)},{passive:true});image.addEventListener('touchcancel',()=>{clearTimeout(hold)},{passive:true});image.addEventListener('touchend',event=>{clearTimeout(hold);const now=Date.now();if(now-lastTap<300){event.preventDefault();send('preview',image);lastTap=0}else{lastTap=now}},{passive:false});image.addEventListener('dblclick',event=>{event.preventDefault();send('preview',image)})})})()
+            """
+            webView.evaluateJavaScript(script)
         }
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.name == "offlineImage",let raw=message.body as? String,let imageURL=URL(string:raw),let webView=message.webView,let controller=topController(from:webView.window?.rootViewController) else{return}
+            guard message.name == "offlineImage",let payload=message.body as? [String:Any],let action=payload["action"] as? String,let raw=payload["src"] as? String,let imageURL=URL(string:raw),let webView=message.webView,let controller=topController(from:webView.window?.rootViewController) else{return}
+            if action == "preview" { controller.present(ImagePreviewController(imageURL:imageURL),animated:true); return }
             let sheet=UIAlertController(title:"图片",message:nil,preferredStyle:.actionSheet)
             sheet.addAction(UIAlertAction(title:"导出图片",style:.default){_ in self.export(imageURL,from:webView)})
             sheet.addAction(UIAlertAction(title:"重新渲染保存",style:.default){_ in self.rerender(imageURL,in:webView)})
@@ -532,4 +536,21 @@ struct LocalWebView: UIViewRepresentable {
         }
         func topController(from controller: UIViewController?) -> UIViewController? { if let presented=controller?.presentedViewController{return topController(from:presented)};if let navigation=controller as? UINavigationController{return topController(from:navigation.visibleViewController)};if let tab=controller as? UITabBarController{return topController(from:tab.selectedViewController)};return controller }
     }
+}
+final class ImagePreviewController: UIViewController, UIScrollViewDelegate {
+    let imageURL: URL
+    private let scrollView=UIScrollView()
+    private let imageView=UIImageView()
+    init(imageURL: URL) { self.imageURL=imageURL;super.init(nibName:nil,bundle:nil) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() {
+        super.viewDidLoad();modalPresentationStyle=.fullScreen;view.backgroundColor=.black
+        scrollView.frame=view.bounds;scrollView.autoresizingMask=[.flexibleWidth,.flexibleHeight];scrollView.minimumZoomScale=1;scrollView.maximumZoomScale=5;scrollView.delegate=self;scrollView.backgroundColor=.black;view.addSubview(scrollView)
+        imageView.frame=scrollView.bounds;imageView.autoresizingMask=[.flexibleWidth,.flexibleHeight];imageView.contentMode=.scaleAspectFit;imageView.backgroundColor=.black;imageView.image=UIImage(contentsOfFile:imageURL.path);scrollView.addSubview(imageView)
+        let close=UIButton(type:.close);close.tintColor=.white;close.frame=CGRect(x:18,y:56,width:36,height:36);close.autoresizingMask=[.flexibleRightMargin,.flexibleBottomMargin];close.addTarget(self,action:#selector(dismissPreview),for:.touchUpInside);view.addSubview(close)
+        let doubleTap=UITapGestureRecognizer(target:self,action:#selector(toggleZoom));doubleTap.numberOfTapsRequired=2;scrollView.addGestureRecognizer(doubleTap)
+    }
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+    @objc func dismissPreview(){dismiss(animated:true)}
+    @objc func toggleZoom(){scrollView.setZoomScale(scrollView.zoomScale > 1 ? 1 : 2.5,animated:true)}
 }
