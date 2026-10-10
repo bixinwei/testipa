@@ -247,6 +247,31 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         }
         return "assets/placeholder.png"
     }
+    /// Reparse changes article structure only.  Reuse an already verified local
+    /// image from the previous saved page instead of capturing the same source again.
+    func reusedImage(from item: Item, source: String, assets: URL, number: Int) -> String? {
+        guard let html=try?String(contentsOfFile:item.file,encoding:.utf8),
+              let imageTag=try?NSRegularExpression(pattern:"<img\\\\b[^>]*>",options:.caseInsensitive),
+              let attribute=try?NSRegularExpression(pattern:"([A-Za-z0-9_-]+)=[\\\"']([^\\\"']*)[\\\"']",options:.caseInsensitive) else{return nil}
+        let sourceKey=source.replacingOccurrences(of:"&amp;",with:"&")
+        for match in imageTag.matches(in:html,range:NSRange(html.startIndex...,in:html)) {
+            guard let range=Range(match.range,in:html) else{continue}
+            let tag=String(html[range]); var values:[String:String]=[:]
+            for itemMatch in attribute.matches(in:tag,range:NSRange(tag.startIndex...,in:tag)) {
+                guard let nameRange=Range(itemMatch.range(at:1),in:tag),let valueRange=Range(itemMatch.range(at:2),in:tag) else{continue}
+                values[String(tag[nameRange]).lowercased()]=String(tag[valueRange])
+            }
+            guard values["data-offline-source"]?.replacingOccurrences(of:"&amp;",with:"&") == sourceKey,
+                  let oldRelative=values["src"],!oldRelative.isEmpty,!oldRelative.hasPrefix("http"),!oldRelative.contains("placeholder.png") else{continue}
+            let oldFile=URL(fileURLWithPath:item.file).deletingLastPathComponent().appendingPathComponent(oldRelative)
+            guard let data=try?Data(contentsOf:oldFile),validImage(data) else{continue}
+            let ext=oldFile.pathExtension.isEmpty ? "png" : oldFile.pathExtension
+            let name=String(format:"%03d.%@",number,ext),destination=assets.appendingPathComponent(name)
+            try?data.write(to:destination,options:.atomic)
+            return "assets/\(name)"
+        }
+        return nil
+    }
     func renderedImage(_ source:String, assets:URL, number:Int) async -> String? {
         guard let encoded=try?JSONEncoder().encode(source),let literal=String(data:encoded,encoding:.utf8) else{return nil}
         // Return one rendered image at a time.  Returning every canvas together
@@ -513,7 +538,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             }
         }
     }
-    func work(deferVideos: Bool=false,exclusionHints:String="",forceFreshPlan:Bool=false) async -> SaveOutcome? {
+    func work(deferVideos: Bool=false,exclusionHints:String="",forceFreshPlan:Bool=false,reusingImagesFrom:Item?=nil) async -> SaveOutcome? {
         guard !url.isEmpty, !key.isEmpty else { log("[程序] 请填写网页地址和 API Key。"); return nil }
         guard !bookmarkStopRequested, !Task.isCancelled else { return nil }
         var stage="初始化"
@@ -584,7 +609,12 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
                 if isVideo && deferVideos { deferredVideos.append(source); continue }
                 if isVideo { videoOrdinal += 1; if let cache=cachedVideo(pageURL:url,ordinal:videoOrdinal){fragment=replaceResourceReference(fragment,source:source,local:"../MediaCache/\(cache.lastPathComponent)");saved += 1;continue};log("[程序] 视频资源地址：\(source)") }
                 if isVideo && !isHLS { downloadStatus="正在下载 MP4 视频…" }
-                let downloaded=isHLS ? await localHLS(source,assets:assets,number:index + 1) : await localAsset(source, assets:assets, number:index + 1, imageOnly:asset.kind == "image")
+                let downloaded: String?
+                if isHLS { downloaded=await localHLS(source,assets:assets,number:index + 1) }
+                else if asset.kind == "image" {
+                    if let previous=reusingImagesFrom,let cached=reusedImage(from:previous,source:source,assets:assets,number:index + 1) { downloaded=cached }
+                    else { downloaded=await localAsset(source,assets:assets,number:index + 1,imageOnly:true) }
+                } else { downloaded=await localAsset(source,assets:assets,number:index + 1) }
                 let local=isVideo ? downloaded.flatMap{cacheVideo(local:$0,folder:dir,pageURL:url,ordinal:videoOrdinal)} : downloaded
                 if let local { fragment = replaceResourceReference(fragment,source:source,local:local); saved += 1 }
                 else if asset.kind == "image" { fragment = replaceResourceReference(fragment,source:source,local:placeholderImage(in:assets)) }
@@ -647,7 +677,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         Task {
             bookmarkStopRequested=false;url=item.url;downloading=true;downloadStatus="正在按非主体标记重新识别网页…"
             defer { downloading=false;downloadStatus="" }
-            guard let outcome=await work(deferVideos:deferVideoDownloads,exclusionHints:hints,forceFreshPlan:true) else { return }
+            guard let outcome=await work(deferVideos:deferVideoDownloads,exclusionHints:hints,forceFreshPlan:true,reusingImagesFrom:item) else { return }
             guard let replacement=items.firstIndex(where:{$0.id == outcome.itemID}) else { return }
             items[replacement].groupID=item.groupID
             let replacementItem=items[replacement]
