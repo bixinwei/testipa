@@ -102,7 +102,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         guard let job=bookmarkJobs.first(where:{$0.status == "pending"}) ?? bookmarkJobs.first else { log("[程序] 请先导入并匹配书签任务。"); return }
         url=job.url; open()
     }
-    func save(){Task{if !bookmarkRunning{bookmarkStopRequested=false};downloading=true;downloadStatus="正在准备保存网页…";defer{downloading=false;downloadStatus=""};_ = await work()}}
+    func save(){Task{if !bookmarkRunning{bookmarkStopRequested=false};downloading=true;downloadStatus="正在准备保存网页…";defer{downloading=false;downloadStatus=""};if let outcome=await work(deferVideos:true),!outcome.videoSources.isEmpty{let job=BookmarkJob(id:UUID(),url:url,status:"done",videoSources:outcome.videoSources,downloadedVideoSources:[],itemID:outcome.itemID,groupID:nil);bookmarkJobs.append(job);persistBookmarkQueue();log("[程序] 已保存视频地址，可在书签任务列表中按需下载。")}}}
     func bookmarkJobs(matching filter: String) -> [BookmarkJob] { filter == "all" ? bookmarkJobs : filter == "none" ? bookmarkJobs.filter{$0.groupID == nil} : bookmarkJobs.filter{$0.groupID?.uuidString == filter} }
     func bookmarkCompleted(matching filter: String) -> Int { bookmarkJobs(matching:filter).filter{$0.status == "done" || $0.status == "failed"}.count }
     func persistBookmarkQueue(){UserDefaults.standard.set(try?JSONEncoder().encode(bookmarkJobs),forKey:"wo.bookmark.queue")}
@@ -206,12 +206,87 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
             return "assets/\(name)"
         } catch { log("[程序] 资源下载失败：\(source)（\(error.localizedDescription)）"); return imageOnly ? await renderedImage(source,assets:assets,number:number) : nil }
     }
-    func localHLS(_ source: String, assets: URL, number: Int) async -> String? {
-        guard let remote=URL(string:source) else { return nil }
-        let target=assets.appendingPathComponent(String(format:"%03d.mp4",number))
-        downloadStatus="正在转存 HLS 视频…"
+    /// Fetches the ordinary HLS media playlist and its dependencies in batches of
+    /// four.  FFmpeg is still used for the final remux so encrypted/fMP4 streams
+    /// retain their original timing and container metadata.
+    func hlsRequest(_ remote: URL) async throws -> (Data, URL) {
+        var request=URLRequest(url:remote)
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",forHTTPHeaderField:"User-Agent")
+        request.setValue(url,forHTTPHeaderField:"Referer")
         let cookies=await browser.cookieHeader(for:remote)
-        let requestHeaders=cookies.isEmpty ? "" : "Cookie: \(cookies)\r\n"
+        if !cookies.isEmpty { request.setValue(cookies,forHTTPHeaderField:"Cookie") }
+        let (data,response)=try await URLSession.shared.data(for:request)
+        guard let http=response as? HTTPURLResponse,(200..<300).contains(http.statusCode),!data.isEmpty else { throw URLError(.badServerResponse) }
+        return (data,response.url ?? remote)
+    }
+    func hlsURI(_ text: String) -> String? {
+        guard let regex=try?NSRegularExpression(pattern:"URI=\\\"([^\\\"]+)\\\""),let match=regex.firstMatch(in:text,range:NSRange(text.startIndex...,in:text)),let range=Range(match.range(at:1),in:text) else { return nil }
+        return String(text[range])
+    }
+    func hlsMediaPlaylist(_ source: URL) async throws -> (String, URL) {
+        var current=source
+        for _ in 0..<3 {
+            let (data,finalURL)=try await hlsRequest(current)
+            guard let playlist=String(data:data,encoding:.utf8) ?? String(data:data,encoding:.unicode) else { throw URLError(.cannotDecodeContentData) }
+            let lines=playlist.components(separatedBy:.newlines)
+            guard let marker=lines.firstIndex(where:{$0.uppercased().hasPrefix("#EXT-X-STREAM-INF")}) else { return (playlist,finalURL) }
+            guard let path=lines[(marker + 1)...].first(where:{let clean=$0.trimmingCharacters(in:.whitespacesAndNewlines);return !clean.isEmpty && !clean.hasPrefix("#")}),let next=URL(string:path.trimmingCharacters(in:.whitespacesAndNewlines),relativeTo:finalURL)?.absoluteURL else { throw URLError(.cannotParseResponse) }
+            current=next
+        }
+        throw URLError(.cannotParseResponse)
+    }
+    func fourWayHLS(_ remote: URL, assets: URL, number: Int) async throws -> URL {
+        let (playlist,playlistURL)=try await hlsMediaPlaylist(remote)
+        let lines=playlist.components(separatedBy:.newlines)
+        // Byte-range playlists need their original HTTP range semantics; the
+        // sequential FFmpeg fallback below remains the safe path for those.
+        guard !lines.contains(where:{$0.uppercased().hasPrefix("#EXT-X-BYTERANGE")}) else { throw URLError(.unsupportedURL) }
+        var originals:[String]=[]
+        for line in lines {
+            let clean=line.trimmingCharacters(in:.whitespacesAndNewlines)
+            let raw: String?
+            if clean.uppercased().hasPrefix("#EXT-X-KEY") || clean.uppercased().hasPrefix("#EXT-X-MAP") { raw=hlsURI(clean) }
+            else if !clean.isEmpty && !clean.hasPrefix("#") { raw=clean }
+            else { raw=nil }
+            if let raw,let absolute=URL(string:raw,relativeTo:playlistURL)?.absoluteURL.absoluteString,!originals.contains(absolute) { originals.append(absolute) }
+        }
+        guard !originals.isEmpty else { throw URLError(.cannotParseResponse) }
+        let work=assets.appendingPathComponent("hls-\(UUID().uuidString)",isDirectory:true)
+        try fm.createDirectory(at:work,withIntermediateDirectories:true)
+        var names:[String:String]=[:]
+        for (index,original) in originals.enumerated() {
+            let ext=URL(string:original)?.pathExtension.isEmpty == false ? URL(string:original)!.pathExtension : "bin"
+            names[original]=String(format:"%04d.%@",index,ext)
+        }
+        var payloads=[String:Data]()
+        var completed=0
+        var start=0
+        while start < originals.count {
+            let batch=Array(originals[start..<min(start + 4,originals.count)])
+            let received=try await withThrowingTaskGroup(of:(String,Data).self,returning:[(String,Data)].self) { group in
+                for original in batch { group.addTask { let (data,_)=try await self.hlsRequest(URL(string:original)!); return (original,data) } }
+                var result:[(String,Data)]=[]
+                for try await part in group { result.append(part) }
+                return result
+            }
+            for (original,data) in received { payloads[original]=data }
+            completed += batch.count
+            downloadStatus="正在以 4 线程下载 HLS 分片：\(completed)/\(originals.count)"
+            start += batch.count
+        }
+        for original in originals { guard let name=names[original],let data=payloads[original] else { throw URLError(.cannotLoadFromNetwork) };try data.write(to:work.appendingPathComponent(name),options:.atomic) }
+        var rewritten:[String]=[]
+        for line in lines {
+            let clean=line.trimmingCharacters(in:.whitespacesAndNewlines)
+            if (clean.uppercased().hasPrefix("#EXT-X-KEY") || clean.uppercased().hasPrefix("#EXT-X-MAP")),let raw=hlsURI(clean),let absolute=URL(string:raw,relativeTo:playlistURL)?.absoluteURL.absoluteString,let local=names[absolute] { rewritten.append(line.replacingOccurrences(of:raw,with:local)) }
+            else if !clean.isEmpty && !clean.hasPrefix("#"),let absolute=URL(string:clean,relativeTo:playlistURL)?.absoluteURL.absoluteString,let local=names[absolute] { rewritten.append(local) }
+            else { rewritten.append(line) }
+        }
+        let localPlaylist=work.appendingPathComponent("offline.m3u8")
+        try rewritten.joined(separator:"\n").write(to:localPlaylist,atomically:true,encoding:.utf8)
+        return localPlaylist
+    }
+    func remuxHLS(_ input: URL, target: URL, referer: String, requestHeaders: String) async -> Bool {
         let monitor=Task { [weak self] in
             while !Task.isCancelled {
                 let size=((try?target.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0)
@@ -219,17 +294,33 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
                 try? await Task.sleep(nanoseconds:500_000_000)
             }
         }
-        return await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool,Never>) in
             DispatchQueue.global(qos:.userInitiated).async {
                 var message: NSString?
-                let succeeded=WOSRemuxHLS(remote,target,self.url,requestHeaders,&message)
+                let succeeded=WOSRemuxHLS(input,target,referer,requestHeaders,&message)
                 Task { @MainActor in
                     monitor.cancel()
-                    if succeeded { self.downloadStatus="HLS 视频已转存完成";self.log("[程序] 已将 HLS 视频转存为本地 MP4。"); continuation.resume(returning:"assets/\(target.lastPathComponent)") }
-                    else { self.log("[程序] HLS 视频转存失败：\(message as String? ?? "未知错误")"); continuation.resume(returning:nil) }
+                    if succeeded { self.downloadStatus="HLS 视频已转存完成";self.log("[程序] 已将 HLS 视频转存为本地 MP4。"); continuation.resume(returning:true) }
+                    else { self.log("[程序] HLS 视频转存失败：\(message as String? ?? "未知错误")"); continuation.resume(returning:false) }
                 }
             }
         }
+    }
+    func localHLS(_ source: String, assets: URL, number: Int) async -> String? {
+        guard let remote=URL(string:source) else { return nil }
+        let target=assets.appendingPathComponent(String(format:"%03d.mp4",number))
+        downloadStatus="正在准备 4 线程 HLS 下载…"
+        do {
+            let localPlaylist=try await fourWayHLS(remote,assets:assets,number:number)
+            defer { try?fm.removeItem(at:localPlaylist.deletingLastPathComponent()) }
+            log("[程序] HLS 视频正在以 4 线程并发下载分片。")
+            let result=await remuxHLS(localPlaylist,target:target,referer:"",requestHeaders:"")
+            if result { return "assets/\(target.lastPathComponent)" }
+        } catch { log("[程序] 4 线程 HLS 下载不适用于此播放列表，已切换兼容模式。") }
+        downloadStatus="正在兼容模式转存 HLS 视频…"
+        let cookies=await browser.cookieHeader(for:remote)
+        let requestHeaders=cookies.isEmpty ? "" : "Cookie: \(cookies)\r\n"
+        return await remuxHLS(remote,target:target,referer:url,requestHeaders:requestHeaders) ? "assets/\(target.lastPathComponent)" : nil
     }
     func videoCacheFile(pageURL:String, ordinal:Int) -> URL {
         let key="\(pageURL)#video-\(ordinal)"
