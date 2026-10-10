@@ -76,6 +76,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
     @Published var api=UserDefaults.standard.string(forKey:"wo.api") ?? "https://api.deepseek.com/v1"
     @Published var model=UserDefaults.standard.string(forKey:"wo.model") ?? "deepseek-chat"
     @Published var force=UserDefaults.standard.bool(forKey:"wo.force")
+    @Published var deferVideoDownloads=UserDefaults.standard.object(forKey:"wo.defer.videos") == nil ? true : UserDefaults.standard.bool(forKey:"wo.defer.videos")
     @Published var bookmarkDomains=UserDefaults.standard.string(forKey:"wo.bookmark.domains") ?? ""
     @Published var browserShown = false
     @Published var logs:[String]=[]
@@ -96,13 +97,13 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
     var mediaCache:URL{root.appendingPathComponent("MediaCache",isDirectory:true)}
     init(){if let d=try?Data(contentsOf:root.appendingPathComponent("catalog.json")){items=(try?JSONDecoder().decode([Item].self,from:d)) ?? []};if let d=UserDefaults.standard.data(forKey:"wo.bookmark.queue"){bookmarkJobs=(try?JSONDecoder().decode([BookmarkJob].self,from:d)) ?? []};if let d=UserDefaults.standard.data(forKey:"wo.archive.groups"){archiveGroups=(try?JSONDecoder().decode([ArchiveGroup].self,from:d)) ?? []};_ = cleanupOrphanedLibrary()}
     func log(_ x:String){logs.append(x);if logs.count>50{logs.removeFirst(logs.count-50)}}
-    func saveConfig(){UserDefaults.standard.set(url,forKey:"wo.url");UserDefaults.standard.set(key,forKey:"wo.key");UserDefaults.standard.set(api,forKey:"wo.api");UserDefaults.standard.set(model,forKey:"wo.model");UserDefaults.standard.set(force,forKey:"wo.force");UserDefaults.standard.set(bookmarkDomains,forKey:"wo.bookmark.domains");log("[程序] 配置已保存。")}
+    func saveConfig(){UserDefaults.standard.set(url,forKey:"wo.url");UserDefaults.standard.set(key,forKey:"wo.key");UserDefaults.standard.set(api,forKey:"wo.api");UserDefaults.standard.set(model,forKey:"wo.model");UserDefaults.standard.set(force,forKey:"wo.force");UserDefaults.standard.set(deferVideoDownloads,forKey:"wo.defer.videos");UserDefaults.standard.set(bookmarkDomains,forKey:"wo.bookmark.domains");log("[程序] 配置已保存。")}
     func open(){saveConfig();browser.open(url);browserShown=true;log("[程序] 已打开验证浏览器，请完成验证。")}
     func openBookmarkVerification(){
         guard let job=bookmarkJobs.first(where:{$0.status == "pending"}) ?? bookmarkJobs.first else { log("[程序] 请先导入并匹配书签任务。"); return }
         url=job.url; open()
     }
-    func save(){Task{if !bookmarkRunning{bookmarkStopRequested=false};downloading=true;downloadStatus="正在准备保存网页…";defer{downloading=false;downloadStatus=""};if let outcome=await work(deferVideos:true),!outcome.videoSources.isEmpty{let job=BookmarkJob(id:UUID(),url:url,status:"done",videoSources:outcome.videoSources,downloadedVideoSources:[],itemID:outcome.itemID,groupID:nil);bookmarkJobs.append(job);persistBookmarkQueue();log("[程序] 已保存视频地址，可在书签任务列表中按需下载。")}}}
+    func save(){Task{if !bookmarkRunning{bookmarkStopRequested=false};downloading=true;downloadStatus="正在准备保存网页…";defer{downloading=false;downloadStatus=""};if let outcome=await work(deferVideos:deferVideoDownloads),deferVideoDownloads,!outcome.videoSources.isEmpty{let job=BookmarkJob(id:UUID(),url:url,status:"done",videoSources:outcome.videoSources,downloadedVideoSources:[],itemID:outcome.itemID,groupID:nil);bookmarkJobs.append(job);persistBookmarkQueue();log("[程序] 已保存视频地址，可在书签任务列表中按需下载。")}}}
     func bookmarkJobs(matching filter: String) -> [BookmarkJob] { filter == "all" ? bookmarkJobs : filter == "none" ? bookmarkJobs.filter{$0.groupID == nil} : bookmarkJobs.filter{$0.groupID?.uuidString == filter} }
     func bookmarkCompleted(matching filter: String) -> Int { bookmarkJobs(matching:filter).filter{$0.status == "done" || $0.status == "failed"}.count }
     func persistBookmarkQueue(){UserDefaults.standard.set(try?JSONEncoder().encode(bookmarkJobs),forKey:"wo.bookmark.queue")}
@@ -147,7 +148,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
         while let index=bookmarkJobs.indices.first(where:{candidateIndex in bookmarkJobs[candidateIndex].status == "pending" && bookmarkJobs(matching:activeBookmarkFilter).contains(where:{job in job.id == bookmarkJobs[candidateIndex].id})}) {
             if bookmarkStopRequested || Task.isCancelled { break }
             bookmarkCurrent=bookmarkCompleted(matching:activeBookmarkFilter) + 1; url=bookmarkJobs[index].url; downloadStatus="正在准备保存网页…"; saveConfig();log("[程序] 正在处理书签任务 \(bookmarkCurrent)/\(bookmarkJobs(matching:activeBookmarkFilter).count)：\(url)")
-            let outcome=await work(deferVideos:true)
+            let outcome=await work(deferVideos:deferVideoDownloads)
             downloadStatus=""
             if bookmarkStopRequested || Task.isCancelled { break }
             if let outcome { bookmarkJobs[index].status="done";bookmarkJobs[index].itemID=outcome.itemID;bookmarkJobs[index].videoSources=outcome.videoSources;bookmarkJobs[index].downloadedVideoSources=[];if let itemIndex=items.firstIndex(where:{$0.id == outcome.itemID}){items[itemIndex].groupID=bookmarkJobs[index].groupID;persist()} }
@@ -597,6 +598,8 @@ struct ConfigurationTab: View {
             Button("刷新模型列表") { s.refreshModels() }
             if !s.models.isEmpty { Picker("选择模型", selection: $s.model) { ForEach(s.models,id:\.self) { Text($0).tag($0) } } }
             Toggle("每次都 AI 识别", isOn: $s.force)
+            Toggle("延后下载视频（仅保存视频地址）", isOn: $s.deferVideoDownloads)
+            Text("默认开启。开启后，网页会先保存正文、图片和视频地址；可稍后在“书签批量保存”中手动下载视频。关闭后会在保存网页时直接下载视频。").font(.caption).foregroundStyle(.secondary)
             Button("保存配置") { s.saveConfig() }
         }
         Section("归档分组") {
