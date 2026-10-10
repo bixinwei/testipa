@@ -144,7 +144,7 @@ struct SaveOutcome { let itemID: UUID; let videoSources: [String] }
     func stopBookmarkQueue(){bookmarkStopRequested=true;log("[程序] 已请求暂停；为保护当前网页，正在完成或安全中止当前任务。")}
     func runBookmarkQueue() async {
         defer { bookmarkRunning=false;persistBookmarkQueue() }
-        while let index=bookmarkJobs.indices.first(where:{bookmarkJobs[$0].status == "pending" && bookmarkJobs(matching:activeBookmarkFilter).contains(where:{$0.id == bookmarkJobs[$0].id})}) {
+        while let index=bookmarkJobs.indices.first(where:{candidateIndex in bookmarkJobs[candidateIndex].status == "pending" && bookmarkJobs(matching:activeBookmarkFilter).contains(where:{job in job.id == bookmarkJobs[candidateIndex].id})}) {
             if bookmarkStopRequested || Task.isCancelled { break }
             bookmarkCurrent=bookmarkCompleted(matching:activeBookmarkFilter) + 1; url=bookmarkJobs[index].url; downloadStatus="正在准备保存网页…"; saveConfig();log("[程序] 正在处理书签任务 \(bookmarkCurrent)/\(bookmarkJobs(matching:activeBookmarkFilter).count)：\(url)")
             let outcome=await work(deferVideos:true)
