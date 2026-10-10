@@ -475,7 +475,16 @@ struct DownloadedTab:View{
     @State private var editMode: EditMode = .inactive
     @State private var groupFilter="all"
     var visibleItems:[Item] { groupFilter == "all" ? s.items : groupFilter == "none" ? s.items.filter{$0.groupID == nil} : s.items.filter{$0.groupID?.uuidString == groupFilter} }
-    var body:some View{NavigationStack{List(selection:$selectedItems){Section("归档筛选"){Picker("显示",selection:$groupFilter){Text("全部网页").tag("all");Text("未分组").tag("none");ForEach(s.archiveGroups){group in Text(group.name).tag(group.id.uuidString)}}.onChange(of:groupFilter){_ in selectedItems.removeAll()}};Section("已下载网页（\(visibleItems.count)）"){if visibleItems.isEmpty{Text("当前分组没有已下载网页。").foregroundStyle(.secondary)}else{ForEach(visibleItems){item in NavigationLink(destination:OfflinePreview(item:item)){Text(item.title).foregroundStyle(.primary)}.tag(item.id)}}}.navigationTitle("已下载").environment(\.editMode,$editMode).toolbar{ToolbarItemGroup(placement:.topBarLeading){Button(editMode.isEditing ? "完成" : "多选"){editMode=editMode.isEditing ? .inactive : .active;if !editMode.isEditing{selectedItems.removeAll()}};if editMode.isEditing{Button("全选"){selectedItems=Set(visibleItems.map{$0.id})}.disabled(visibleItems.isEmpty)}};ToolbarItem(placement:.topBarTrailing){Button("删除选中"){s.deleteItems(selectedItems);selectedItems.removeAll()}.disabled(selectedItems.isEmpty)};ToolbarItem(placement:.bottomBar){Menu("移动到分组"){Button("未分组"){s.moveItems(selectedItems,to:nil);selectedItems.removeAll()};ForEach(s.archiveGroups){group in Button(group.name){s.moveItems(selectedItems,to:group.id);selectedItems.removeAll()}}}.disabled(selectedItems.isEmpty)}}}}
+    var body:some View{NavigationStack{
+        List(selection:$selectedItems){
+            Section("归档筛选"){Picker("显示",selection:$groupFilter){Text("全部网页").tag("all");Text("未分组").tag("none");ForEach(s.archiveGroups){group in Text(group.name).tag(group.id.uuidString)}}.onChange(of:groupFilter){_ in selectedItems.removeAll()}}
+            Section("已下载网页（\(visibleItems.count)）") { if visibleItems.isEmpty { Text("当前分组没有已下载网页。").foregroundStyle(.secondary) } else { ForEach(visibleItems){item in NavigationLink(destination:OfflinePreview(item:item)){Text(item.title).foregroundStyle(.primary)}.tag(item.id)} } }
+        }.navigationTitle("已下载").environment(\.editMode,$editMode).toolbar{
+            ToolbarItemGroup(placement:.topBarLeading){Button(editMode.isEditing ? "完成" : "多选"){editMode=editMode.isEditing ? .inactive : .active;if !editMode.isEditing{selectedItems.removeAll()}};if editMode.isEditing{Button("全选"){selectedItems=Set(visibleItems.map{$0.id})}.disabled(visibleItems.isEmpty)}}
+            ToolbarItem(placement:.topBarTrailing){Button("删除选中"){s.deleteItems(selectedItems);selectedItems.removeAll()}.disabled(selectedItems.isEmpty)}
+            ToolbarItem(placement:.bottomBar){Menu("移动到分组"){Button("未分组"){s.moveItems(selectedItems,to:nil);selectedItems.removeAll()};ForEach(s.archiveGroups){group in Button(group.name){s.moveItems(selectedItems,to:group.id);selectedItems.removeAll()}}}.disabled(selectedItems.isEmpty)}
+        }
+    }}
 }
 struct ConfigurationTab: View {
     @EnvironmentObject var s: Store
