@@ -671,6 +671,22 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         return styled
     }
 
+    fileprivate static func refreshDetectedLinks(in textView: UITextView) {
+        let value = textView.attributedText.string
+        let range = NSRange(location: 0, length: (value as NSString).length)
+        guard range.length > 0 else { return }
+
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        let storage = textView.textStorage
+        storage.beginEditing()
+        storage.removeAttribute(.link, range: range)
+        detector?.enumerateMatches(in: value, options: [], range: range) { match, _, _ in
+            guard let match = match, let url = match.url else { return }
+            storage.addAttribute(.link, value: url, range: match.range)
+        }
+        storage.endEditing()
+    }
+
     private static func attachmentString(
         for image: NoteImage,
         maxImageWidth: CGFloat
@@ -1028,10 +1044,11 @@ struct OldOSNotesMultilineTextView: UIViewRepresentable {
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
-            // Replacing attributedText while TextKit is resigning first
-            // responder invalidates attachment layout and can leave a caret
-            // beside an image without an input view.  The text storage is
-            // already canonical; publish it without rebuilding it.
+            // Refresh only link attributes in-place. Replacing attributedText
+            // while TextKit is resigning first responder can invalidate image
+            // attachment layout and leave a caret beside an image without an
+            // input view.
+            OldOSNotesMultilineTextView.refreshDetectedLinks(in: textView)
             publishDocument(from: textView)
             isUserEditingSession = false
             onCommit()
