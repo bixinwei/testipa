@@ -577,13 +577,14 @@ struct OldOSNotesDestinationView: View {
         // OldOS rendered this 320 pt-wide asset inside its shorter, simulated
         // device canvas. On a modern full-height screen, scaledToFill crops the
         // original 21–24 pt margin rules off both sides. Preserve the source
-        // image's first 25 pt verbatim and stretch only the paper body. This
-        // artwork can leave uncovered areas, so provide an opaque paper base
-        // underneath it instead of letting the app's black root background
-        // show through.
+        // image's first 25 pt verbatim and stretch only the paper body. Use the
+        // same NotesBody material as the home list underneath this detail-only
+        // margin artwork so transparent areas retain the textured paper.
         .background {
             ZStack {
-                Color(red: 1.00, green: 0.99, blue: 0.82)
+                Image("NotesBody")
+                    .resizable()
+                    .scaledToFill()
                 Image("bodyMarginThin-568h")
                     .resizable(
                         capInsets: EdgeInsets(top: 0, leading: 25, bottom: 0, trailing: 1),
