@@ -583,7 +583,7 @@ struct OldOSNotesDestinationView: View {
         // show through.
         .background {
             ZStack {
-                Color.retroPaper
+                Color(red: 1.00, green: 0.99, blue: 0.82)
                 Image("bodyMarginThin-568h")
                     .resizable(
                         capInsets: EdgeInsets(top: 0, leading: 25, bottom: 0, trailing: 1),
