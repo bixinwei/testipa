@@ -577,14 +577,20 @@ struct OldOSNotesDestinationView: View {
         // OldOS rendered this 320 pt-wide asset inside its shorter, simulated
         // device canvas. On a modern full-height screen, scaledToFill crops the
         // original 21–24 pt margin rules off both sides. Preserve the source
-        // image's first 25 pt verbatim and stretch only the paper body.
-        .background(
-            Image("bodyMarginThin-568h")
-                .resizable(
-                    capInsets: EdgeInsets(top: 0, leading: 25, bottom: 0, trailing: 1),
-                    resizingMode: .stretch
-                )
-        )
+        // image's first 25 pt verbatim and stretch only the paper body. This
+        // artwork can leave uncovered areas, so provide an opaque paper base
+        // underneath it instead of letting the app's black root background
+        // show through.
+        .background {
+            ZStack {
+                Color.retroPaper
+                Image("bodyMarginThin-568h")
+                    .resizable(
+                        capInsets: EdgeInsets(top: 0, leading: 25, bottom: 0, trailing: 1),
+                        resizingMode: .stretch
+                    )
+            }
+        }
     }
 
     private var metadata: OldOSDestinationMetadata {
