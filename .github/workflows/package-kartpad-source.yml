@@ -1,0 +1,48 @@
+name: Package KartPad source
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - .github/workflows/package-kartpad-source.yml
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out KartPad v0.8.10 and its submodules
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: chrissotraidis/kartpad
+          ref: v0.8.10
+          submodules: recursive
+          persist-credentials: false
+          path: kartpad
+
+      - name: Verify submodules and create source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git -C kartpad submodule status --recursive | grep -Eq '^[+-U]'; then
+            echo "A KartPad submodule is missing or not at its pinned revision." >&2
+            exit 1
+          fi
+          tar --exclude-vcs -czf "$RUNNER_TEMP/kartpad-v0.8.10-source.tar.gz" -C kartpad .
+          sha256sum "$RUNNER_TEMP/kartpad-v0.8.10-source.tar.gz" > "$RUNNER_TEMP/kartpad-v0.8.10-source.tar.gz.sha256"
+          tar -tzf "$RUNNER_TEMP/kartpad-v0.8.10-source.tar.gz" >/dev/null
+
+      - name: Upload source package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: kartpad-v0.8.10-source
+          path: |
+            ${{ runner.temp }}/kartpad-v0.8.10-source.tar.gz
+            ${{ runner.temp }}/kartpad-v0.8.10-source.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
