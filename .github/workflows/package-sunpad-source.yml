@@ -29,7 +29,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tar --exclude-vcs -czf "$RUNNER_TEMP/sunpad-v0.3.1-source.tar.gz" -C sunpad .
+          # Keep the shallow Git metadata and submodule gitdirs. PadMint recognizes
+          # a local source checkout by its Git HEAD and uses the pinned submodule
+          # metadata during the Windows build; persist-credentials is disabled above.
+          tar -czf "$RUNNER_TEMP/sunpad-v0.3.1-source.tar.gz" -C sunpad .
           sha256sum "$RUNNER_TEMP/sunpad-v0.3.1-source.tar.gz" > "$RUNNER_TEMP/sunpad-v0.3.1-source.tar.gz.sha256"
           tar -tzf "$RUNNER_TEMP/sunpad-v0.3.1-source.tar.gz" >/dev/null
 
