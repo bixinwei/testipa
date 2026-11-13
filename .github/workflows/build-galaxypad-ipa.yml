@@ -1,0 +1,46 @@
+name: Build GalaxyPad IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 300
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      PADMINT_REPOSITORY_PRIVATE: "false"
+    steps:
+      - name: Checkout official PadMint builder
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: chrissotraidis/padmint
+          ref: main
+          persist-credentials: false
+
+      - name: Build GalaxyPad for iPhone and iPad
+        run: |
+          xcodebuild -version
+          df -h "$RUNNER_TEMP"
+          PADMINT_HOME="$RUNNER_TEMP/padmint" /usr/bin/python3 scripts/github-build.py galaxypad --out "$RUNNER_TEMP/out"
+
+      - name: Create checksum
+        working-directory: ${{ runner.temp }}/out
+        run: |
+          ls -la
+          shasum -a 256 ./*.ipa | tee SHA256SUMS
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: galaxypad-iphone-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/out/*.ipa
+            ${{ runner.temp }}/out/SHA256SUMS
+          retention-days: 1
+          if-no-files-found: error
